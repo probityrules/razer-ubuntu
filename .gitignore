@@ -14,3 +14,5 @@ _vendor/
 *.tar.gz
 tartarus-diagnose*.log
 .cache/
+.coverage
+htmlcov/

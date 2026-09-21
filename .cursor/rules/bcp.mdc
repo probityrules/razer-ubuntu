@@ -1,0 +1,14 @@
+---
+description: Shorthand "bcp" means bump package versions, commit, and push
+alwaysApply: true
+---
+
+# bcp = bump, commit, push
+
+When the user says **bcp** (alone or clearly as that shorthand), do all three in order:
+
+1. **Bump** the package version in `pyproject.toml` and `src/tartarus_v2/__init__.py` (patch for fixes; minor for features).
+2. **Commit** following the repo’s git commit protocol (status/diff/log, stage relevant files, HEREDOC message, never skip hooks).
+3. **Push** the current branch to its remote (`git push` / `-u` if needed). Do not force-push.
+
+If there is nothing to commit after the bump, say so and do not create an empty commit. If push is blocked, report the error; do not force-push unless the user explicitly asks.

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Tartarus V2
+Comment=Control Razer Tartarus V2 lighting, remaps, Hypershift, and diagnostics
+Exec=tartarus-v2 gui
+Icon=input-keyboard
+Terminal=false
+Type=Application
+Categories=Settings;HardwareSettings;Utility;
+Keywords=razer;tartarus;chroma;keypad;
+StartupNotify=true

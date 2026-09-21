@@ -1,0 +1,21 @@
+[run]
+source = tartarus_v2
+omit =
+    */tartarus_v2/__main__.py
+    */tartarus_v2/hid/device.py
+    */tartarus_v2/hid/chroma.py
+    */tartarus_v2/input/remapper.py
+    */tartarus_v2/input/macros.py
+    */tartarus_v2/daemon.py
+    */tartarus_v2/diagnose.py
+    */tartarus_v2/gui/app.py
+    */tartarus_v2/gui/window.py
+    */tartarus_v2/gui/pages.py
+    */tartarus_v2/gui/tray.py
+    */tartarus_v2/gui/gi_check.py
+    */tartarus_v2/gui/workers.py
+
+[report]
+fail_under = 85
+show_missing = true
+skip_empty = true

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tartarus-v2"
-version = "0.1.0"
-description = "Standalone userspace driver for Razer Tartarus V2 on Linux (RGB, remap, Hypershift, macros)"
+version = "0.2.0"
+description = "Standalone userspace driver for Razer Tartarus V2 on Linux (RGB, remap, Hypershift, macros, GUI)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -20,6 +20,7 @@ linux = [
 ]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=5.0",
 ]
 
 [project.scripts]
