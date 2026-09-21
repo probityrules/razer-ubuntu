@@ -2,7 +2,7 @@
 
 > **Status:** Design proposal for stakeholder review. Implementation has not started.
 
-**Overview:** Build a standalone userspace Tartarus V2 stack for Ubuntu 26 (RGB, remapping, macros, profiles) with a single paste-ready diagnose command for Windows↔Linux remote debugging. No OpenRazer runtime dependency.
+**Overview:** Build a standalone userspace Tartarus V2 stack for Ubuntu 26 (RGB, remapping, Hypershift, macros, profiles) with a single paste-ready diagnose command for Windows↔Linux remote debugging. No OpenRazer runtime dependency.
 
 ## Context
 
@@ -31,8 +31,8 @@ flowchart LR
 **Runtime split:**
 
 1. **Chroma backend** — open the control HID interface, send extended-matrix feature reports for effects, brightness, profile LEDs, custom frames
-2. **Input remapper** — grab Tartarus evdev nodes, apply profile map + macros, emit via `uinput`
-3. **Daemon** — load profile, apply lighting, run remap loop
+2. **Input remapper** — grab Tartarus evdev nodes, apply profile map + Hypershift layer + macros, emit via `uinput`
+3. **Daemon** — load profile, apply lighting, run remap loop (tracks Hypershift hold state)
 4. **Diagnose** — first-class, paste-ready system dump
 
 ## Proposed repo layout
@@ -40,8 +40,8 @@ flowchart LR
 - `pyproject.toml` — package `tartarus-v2`, deps: `hidapi`, `evdev` (Linux-only extras)
 - `src/tartarus_v2/` — CLI (`diagnose`, `daemon`, `set-effect`, `profile`)
 - `src/tartarus_v2/hid/` — report framing, device discovery, chroma commands (protocol referenced from public OpenRazer sources only; no runtime dependency)
-- `src/tartarus_v2/input/` — key ID table, remapper, macro engine
-- `src/tartarus_v2/profiles/` — JSON load/save, default layout
+- `src/tartarus_v2/input/` — key ID table, remapper, Hypershift layer engine, macro engine
+- `src/tartarus_v2/profiles/` — JSON load/save with standard + Hypershift layers, default layout
 - `src/tartarus_v2/diagnose.py` — remote debug dump
 - `configs/default.json` — default profile
 - `scripts/install-ubuntu.sh` — Ubuntu 26 deps, udev rules, groups, OpenRazer conflict check
@@ -54,11 +54,12 @@ flowchart LR
 | Keys work | Usable as keyboard; remapper optional with shipped default profile |
 | RGB | none, static, spectrum, wave, breath, reactive, starlight, custom frame; brightness 0–255 |
 | Remap | all keypad keys + thumb stick directions + scroll / extra button to key or combo |
-| Macros | sequenced keypresses with delays; bind to a key |
+| Hypershift | Synapse-style secondary layer: assign any key as Hypershift; while held, other keys use the Hypershift bindings (key, combo, or macro). Each profile stores **standard** and **hypershift** maps |
+| Macros | sequenced keypresses with delays; bind to a key on either layer |
 | Profiles | multiple named profiles; switch via CLI and a profile-switch key binding |
-| Diagnostics | `tartarus-v2 diagnose` always available |
+| Diagnostics | `tartarus-v2 diagnose` always available; debug log records layer enter/exit |
 
-**Deferred** (after first Linux bring-up): Synapse hypershift parity, GUI tray, gamepad uinput.
+**Deferred** (after first Linux bring-up): GUI tray, gamepad uinput.
 
 ## Debugging log (Windows develop, Linux test)
 
@@ -79,8 +80,8 @@ Prints the same content to stdout for copy-paste.
 5. Conflict check — OpenRazer present/bound; exact unbind steps if blocking
 6. Permissions — `input`/`plugdev` groups, udev rule status
 7. Live probe — open hidraw, firmware/serial if possible, safe get-report; **annotated hex** TX/RX (90-byte layout)
-8. Optional `--listen 3` — 3s capture of physical key codes
-9. Log tail — `~/.cache/tartarus-v2/tartarus-v2.log` + `dmesg` hid/razer snippets
+8. Optional `--listen 3` — 3s capture of physical key codes (notes Hypershift key if configured)
+9. Log tail — `~/.cache/tartarus-v2/tartarus-v2.log` (includes Hypershift layer transitions when `--debug`) + `dmesg` hid/razer snippets
 10. Footer — `=== COPY FROM HERE ===` / `=== COPY TO HERE ===` banners
 
 **Daemon logging:** `~/.cache/tartarus-v2/tartarus-v2.log` with `INFO`/`DEBUG`; HID hex and remap decisions when `--debug`. Diagnose always attaches a tail of that file.
@@ -98,12 +99,13 @@ Prints the same content to stdout for copy-paste.
 2. HID discovery + report TX/RX + firmware/brightness
 3. Lighting effects + profile LEDs
 4. Key map + remapper (evdev to uinput)
-5. Macros + multi-profile JSON
-6. Daemon + install script + install/usage docs
+5. Hypershift layer (modifier key + secondary map per profile)
+6. Macros + multi-profile JSON
+7. Daemon + install script + install/usage docs
 
 ## Success criteria
 
 - Diagnose produces a self-contained pasteable log on Ubuntu 26 with the device plugged in
 - RGB works without OpenRazer
-- Remap + macro profile works in a desktop/game session
+- Remap + Hypershift + macro profile works in a desktop/game session (hold Hypershift → secondary bindings fire; release → standard layer)
 - Diagnose output can be pasted from Linux into the development chat so iteration continues from Windows
