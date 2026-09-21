@@ -1,0 +1,11 @@
+# Razer Tartarus V2 — hidraw + input access for tartarus-v2 userspace driver
+# USB VID:PID 1532:022B
+
+# hidraw nodes
+KERNEL=="hidraw*", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="022b", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# input event nodes
+SUBSYSTEM=="input", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="022b", MODE="0660", GROUP="input", TAG+="uaccess"
+
+# USB device node (pyusb)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="022b", MODE="0660", GROUP="plugdev", TAG+="uaccess"

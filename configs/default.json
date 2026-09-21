@@ -1,0 +1,67 @@
+{
+  "name": "default",
+  "hypershift_key": "mode",
+  "lighting": {
+    "effect": "spectrum",
+    "brightness": 128
+  },
+  "standard": {
+    "bindings": {
+      "key_01": "1",
+      "key_02": "2",
+      "key_03": "3",
+      "key_04": "4",
+      "key_05": "5",
+      "key_06": "q",
+      "key_07": "w",
+      "key_08": "e",
+      "key_09": "r",
+      "key_10": "t",
+      "key_11": "a",
+      "key_12": "s",
+      "key_13": "d",
+      "key_14": "f",
+      "key_15": "g",
+      "thumb": "space",
+      "stick_up": "up",
+      "stick_down": "down",
+      "stick_left": "left",
+      "stick_right": "right",
+      "scroll_up": { "type": "profile_next" },
+      "scroll_down": { "type": "profile_prev" }
+    }
+  },
+  "hypershift": {
+    "bindings": {
+      "key_01": "F1",
+      "key_02": "F2",
+      "key_03": "F3",
+      "key_04": "F4",
+      "key_05": "F5",
+      "key_06": "F6",
+      "key_07": "F7",
+      "key_08": "F8",
+      "key_09": "F9",
+      "key_10": "F10",
+      "key_11": "F11",
+      "key_12": "F12",
+      "key_13": "escape",
+      "key_14": {
+        "type": "macro",
+        "steps": [
+          { "tap": "ctrl+c" },
+          { "delay_ms": 30 }
+        ]
+      },
+      "key_15": {
+        "type": "macro",
+        "steps": [ { "tap": "ctrl+v" } ]
+      },
+      "thumb": "enter",
+      "stick_up": "pageup",
+      "stick_down": "pagedown",
+      "stick_left": "home",
+      "stick_right": "end"
+    }
+  }
+}

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tartarus-v2"
+version = "0.1.0"
+description = "Standalone userspace driver for Razer Tartarus V2 on Linux (RGB, remap, Hypershift, macros)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "tartarus-v2 contributors" }]
+dependencies = [
+    "pyusb>=1.2.1",
+]
+
+[project.optional-dependencies]
+linux = [
+    "evdev>=1.7.0",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+tartarus-v2 = "tartarus_v2.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tartarus_v2 = ["py.typed"]
