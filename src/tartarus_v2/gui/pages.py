@@ -28,6 +28,19 @@ def _toast(window: Any, message: str) -> None:
         pass
 
 
+def _error(window: Any, title: str, message: str) -> None:
+    """Show a toast and an alert dialog for user-visible failures."""
+    _toast(window, f"{title}: {message}")
+    try:
+        from gi.repository import Adw
+
+        dialog = Adw.AlertDialog.new(title, message)
+        dialog.add_response("ok", "OK")
+        dialog.present(window)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _add_permissions_group(page: Any, window: Any, ctrl: DaemonController | None = None) -> None:
     """Banner + Fix button when input/plugdev membership is incomplete."""
     from gi.repository import Adw, Gtk
@@ -113,7 +126,7 @@ def build_device_page(window: Any) -> Any:
 
         def done(result: Any, error: BaseException | None) -> None:
             if error:
-                _toast(window, f"Device error: {error}")
+                _error(window, "Device error", str(error))
                 return
             firmware.set_subtitle(str(result.get("firmware", "")))
             serial.set_subtitle(str(result.get("serial", "")))
@@ -283,7 +296,7 @@ def build_lighting_page(window: Any) -> Any:
 
         def done(_result: Any, error: BaseException | None) -> None:
             if error:
-                _toast(window, f"Lighting error: {error}")
+                _error(window, "Lighting error", str(error))
             elif target_profile:
                 _toast(window, f"Applied {effect} (saved to {target_profile})")
             else:
@@ -347,9 +360,12 @@ def build_profiles_page(window: Any) -> Any:
             row.set_activatable(True)
 
             def _activate(_row: Any, profile_name: str = name) -> None:
-                ctrl.activate_profile(profile_name)
-                reload()
-                _toast(window, f"Active: {profile_name}")
+                try:
+                    ctrl.activate_profile(profile_name)
+                    reload()
+                    _toast(window, f"Active: {profile_name} (daemon reloads if running)")
+                except Exception as exc:  # noqa: BLE001
+                    _error(window, "Could not activate profile", str(exc))
 
             row.connect("activated", _activate)
             _add_row(row)
@@ -379,7 +395,7 @@ def build_profiles_page(window: Any) -> Any:
                 try:
                     ctrl.create_profile(name)
                 except Exception as exc:  # noqa: BLE001
-                    _toast(window, str(exc))
+                    _error(window, "Could not create profile", str(exc))
                     return
                 reload()
                 _toast(window, f"Created {name}")
@@ -447,7 +463,7 @@ def build_profiles_page(window: Any) -> Any:
             try:
                 ctrl.duplicate_profile(name, dest)
             except Exception as exc:  # noqa: BLE001
-                _toast(window, str(exc))
+                _error(window, "Could not duplicate profile", str(exc))
                 return
             reload_combo()
             reload()
@@ -605,16 +621,19 @@ def build_bindings_page(window: Any) -> Any:
             suppress_profile["busy"] = False
 
     def _load_named(name: str | None = None, *, toast: bool = True) -> None:
-        data = ctrl.load_bindings(name)
-        state["data"] = data
-        state["profile"] = data.get("name")
-        hs = data.get("hypershift_key", "mode")
-        if hs in keys:
-            hs_row.set_selected(keys.index(hs))
-        _sync_keymap_bindings()
-        status.set_subtitle(f"Loaded {state['profile']} · {current_layer_label()}")
-        if toast:
-            _toast(window, f"Loaded {state['profile']}")
+        try:
+            data = ctrl.load_bindings(name)
+            state["data"] = data
+            state["profile"] = data.get("name")
+            hs = data.get("hypershift_key", "mode")
+            if hs in keys:
+                hs_row.set_selected(keys.index(hs))
+            _sync_keymap_bindings()
+            status.set_subtitle(f"Loaded {state['profile']} · {current_layer_label()}")
+            if toast:
+                _toast(window, f"Loaded {state['profile']}")
+        except Exception as exc:  # noqa: BLE001
+            _error(window, "Could not load profile", str(exc))
 
     def _on_profile_selected(_row: Any = None, _pspec: Any = None) -> None:
         if suppress_profile["busy"]:
@@ -627,8 +646,11 @@ def build_bindings_page(window: Any) -> Any:
         name = profile_names[idx]
         if state.get("profile") == name and state.get("data"):
             return
-        profiles_ctrl.activate_profile(name)
-        _load_named(name)
+        try:
+            profiles_ctrl.activate_profile(name)
+            _load_named(name)
+        except Exception as exc:  # noqa: BLE001
+            _error(window, "Could not switch profile", str(exc))
 
     def _on_layer_toggled(_btn: Any = None) -> None:
         state["layer"] = current_layer()
@@ -645,35 +667,41 @@ def build_bindings_page(window: Any) -> Any:
             _toast(window, "Open Profiles from the sidebar")
 
     def _save_key(_b: Any = None) -> None:
-        if not state["profile"]:
-            _load_named()
-        logical = keys[key_row.get_selected()]
-        btype = ["key", "macro", "profile_next", "profile_prev"][type_row.get_selected()]
-        text = binding_entry.get_text().strip()
-        if btype == "key":
-            value: Any = text
-        elif btype == "macro":
-            value = {"type": "macro", "steps": [{"tap": text or "a"}]}
-        else:
-            value = {"type": btype}
-        layer = current_layer()
-        data = state["data"] or ctrl.load_bindings(state["profile"])
-        bindings = dict((data.get(layer) or {}).get("bindings") or {})
-        bindings[logical] = value
-        hs_key = keys[hs_row.get_selected()]
-        profile = state["profile"] or data["name"]
-        state["data"] = ctrl.save_bindings(profile, layer, bindings, hs_key)
-        state["profile"] = profile
-        _sync_keymap_bindings()
-        status.set_subtitle(f"Saved {logical} on {current_layer_label()}")
-        _toast(window, f"Saved {logical}")
+        try:
+            if not state["profile"]:
+                _load_named()
+            logical = keys[key_row.get_selected()]
+            btype = ["key", "macro", "profile_next", "profile_prev"][type_row.get_selected()]
+            text = binding_entry.get_text().strip()
+            if btype == "key":
+                value: Any = text
+            elif btype == "macro":
+                value = {"type": "macro", "steps": [{"tap": text or "a"}]}
+            else:
+                value = {"type": btype}
+            layer = current_layer()
+            data = state["data"] or ctrl.load_bindings(state["profile"])
+            bindings = dict((data.get(layer) or {}).get("bindings") or {})
+            bindings[logical] = value
+            hs_key = keys[hs_row.get_selected()]
+            profile = state["profile"] or data["name"]
+            state["data"] = ctrl.save_bindings(profile, layer, bindings, hs_key)
+            state["profile"] = profile
+            _sync_keymap_bindings()
+            status.set_subtitle(f"Saved {logical} on {current_layer_label()}")
+            _toast(window, f"Saved {logical} (daemon reloads if running)")
+        except Exception as exc:  # noqa: BLE001
+            _error(window, "Could not save binding", str(exc))
 
     def _set_hs(_b: Any = None) -> None:
-        if not state["profile"]:
-            _load_named()
-        key = keys[hs_row.get_selected()]
-        state["data"] = ctrl.set_hypershift_key(state["profile"], key)
-        _toast(window, f"Hypershift key: {key}")
+        try:
+            if not state["profile"]:
+                _load_named()
+            key = keys[hs_row.get_selected()]
+            state["data"] = ctrl.set_hypershift_key(state["profile"], key)
+            _toast(window, f"Hypershift key: {key} (daemon reloads if running)")
+        except Exception as exc:  # noqa: BLE001
+            _error(window, "Could not set Hypershift key", str(exc))
 
     profiles_btn.connect("clicked", _go_profiles)
     normal_btn.connect("toggled", _on_layer_toggled)
@@ -764,14 +792,23 @@ def build_daemon_page(window: Any) -> Any:
         _sync_autostart_ui()
 
     def _start(_b: Any = None) -> None:
-        st = ctrl.start_daemon(debug=debug_switch.get_active())
-        status_row.set_subtitle(st.detail + (f" pid={st.pid}" if st.pid else ""))
-        _toast(window, st.detail)
+        try:
+            st = ctrl.start_daemon(debug=debug_switch.get_active())
+            status_row.set_subtitle(st.detail + (f" pid={st.pid}" if st.pid else ""))
+            if st.running:
+                _toast(window, st.detail)
+            else:
+                _error(window, "Daemon did not start", st.detail)
+        except Exception as exc:  # noqa: BLE001
+            _error(window, "Could not start daemon", str(exc))
 
     def _stop(_b: Any = None) -> None:
-        st = ctrl.stop_daemon()
-        status_row.set_subtitle(st.detail)
-        _toast(window, st.detail)
+        try:
+            st = ctrl.stop_daemon()
+            status_row.set_subtitle(st.detail)
+            _toast(window, st.detail)
+        except Exception as exc:  # noqa: BLE001
+            _error(window, "Could not stop daemon", str(exc))
 
     group.add(status_row)
     group.add(debug_row)
@@ -822,7 +859,7 @@ def build_diagnose_page(window: Any) -> Any:
 
         def done(result: Any, error: BaseException | None) -> None:
             if error:
-                _toast(window, f"Diagnose failed: {error}")
+                _error(window, "Diagnose failed", str(error))
                 return
             _toast(window, "Diagnose complete")
 

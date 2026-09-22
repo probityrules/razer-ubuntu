@@ -37,6 +37,7 @@ GUI_EXTRA_HANDLERS: tuple[tuple[str, str], ...] = (
     ("daemon", "is_autostart_enabled"),
     ("daemon", "set_autostart_enabled"),
     ("daemon", "permission_status"),
+    ("daemon", "reload_daemon"),
     ("bindings", "load_bindings"),
     ("bindings", "save_bindings"),
     ("bindings", "set_hypershift_key"),

@@ -38,3 +38,21 @@ def test_start_stop(pid_home: Path) -> None:
             st = daemon_control.stop()
             assert not st.running
             kill.assert_called()
+
+
+def test_reload_signals_running_daemon(pid_home: Path) -> None:
+    daemon_control.pid_path().write_text("7777\n", encoding="utf-8")
+    with patch("tartarus_v2.daemon_control._pid_alive", return_value=True):
+        with patch("tartarus_v2.daemon_control.signal.SIGHUP", 1, create=True):
+            with patch("tartarus_v2.daemon_control.os.kill") as kill:
+                st = daemon_control.reload()
+                assert st.running
+                assert st.detail == "reload signaled"
+                kill.assert_called_once()
+                assert kill.call_args[0][0] == 7777
+
+
+def test_reload_when_not_running(pid_home: Path) -> None:
+    st = daemon_control.reload()
+    assert not st.running
+    assert "not running" in st.detail

@@ -124,6 +124,9 @@ class DaemonController:
     def fix_permissions(self) -> str:
         return actions.fix_permissions()
 
+    def reload_daemon(self) -> daemon_control.DaemonStatus:
+        return daemon_control.reload()
+
 
 class DiagnoseController:
     def __init__(self) -> None:

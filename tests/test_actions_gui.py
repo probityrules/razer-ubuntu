@@ -65,15 +65,17 @@ def test_bindings_hypershift(profile_home: Path) -> None:
     ctrl = BindingsController()
     data = ctrl.load_bindings("default")
     assert data["hypershift_key"]
-    updated = ctrl.set_hypershift_key("default", "thumb")
-    assert updated["hypershift_key"] == "thumb"
-    saved = ctrl.save_bindings(
-        "default",
-        "hypershift",
-        {"key_01": "F1", "key_02": {"type": "macro", "steps": [{"tap": "a"}]}},
-        hypershift_key="thumb",
-    )
-    assert saved["hypershift"]["bindings"]["key_01"] == "F1"
+    with patch("tartarus_v2.actions.nudge_daemon_reload", return_value="reload signaled") as nudge:
+        updated = ctrl.set_hypershift_key("default", "thumb")
+        assert updated["hypershift_key"] == "thumb"
+        saved = ctrl.save_bindings(
+            "default",
+            "hypershift",
+            {"key_01": "F1", "key_02": {"type": "macro", "steps": [{"tap": "a"}]}},
+            hypershift_key="thumb",
+        )
+        assert saved["hypershift"]["bindings"]["key_01"] == "F1"
+        assert nudge.call_count >= 2
 
 
 @patch("tartarus_v2.gui.controllers.daemon_control.start")

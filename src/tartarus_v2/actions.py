@@ -88,6 +88,7 @@ def show_profile(name: str | None = None) -> dict[str, Any]:
 def use_profile(name: str) -> str:
     prof.load_profile(name)
     prof.set_active_profile_name(name)
+    nudge_daemon_reload()
     return name
 
 
@@ -96,13 +97,19 @@ def profiles_path() -> Path:
 
 
 def save_profile_data(profile: dict[str, Any], name: str | None = None) -> Path:
-    return prof.save_profile(profile, name)
+    path = prof.save_profile(profile, name)
+    saved = name or profile.get("name")
+    if saved and saved == prof.get_active_profile_name():
+        nudge_daemon_reload()
+    return path
 
 
 def set_hypershift_key(profile_name: str, key: str) -> dict[str, Any]:
     data = prof.load_profile(profile_name)
     data["hypershift_key"] = key
     prof.save_profile(data, profile_name)
+    if profile_name == prof.get_active_profile_name():
+        nudge_daemon_reload()
     return data
 
 
@@ -119,7 +126,17 @@ def save_bindings(
     if hypershift_key is not None:
         data["hypershift_key"] = hypershift_key
     prof.save_profile(data, profile_name)
+    if profile_name == prof.get_active_profile_name():
+        nudge_daemon_reload()
     return data
+
+
+def nudge_daemon_reload() -> str:
+    """If the remap daemon is running, ask it to re-read the active profile."""
+    from tartarus_v2 import daemon_control
+
+    st = daemon_control.reload()
+    return st.detail
 
 
 def duplicate_profile(source: str, dest: str) -> Path:

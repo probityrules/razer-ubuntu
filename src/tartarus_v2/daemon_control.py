@@ -118,3 +118,34 @@ def stop(timeout: float = 5.0) -> DaemonStatus:
         pass
     pid_path().unlink(missing_ok=True)
     return DaemonStatus(running=False, pid=pid, detail="killed")
+
+
+def reload() -> DaemonStatus:
+    """Ask a running daemon to re-read the active profile (SIGHUP)."""
+    current = status()
+    if not current.running or current.pid is None:
+        return DaemonStatus(running=False, detail="daemon not running")
+
+    sighup = getattr(signal, "SIGHUP", None)
+    if sighup is None:
+        return DaemonStatus(
+            running=True,
+            pid=current.pid,
+            detail="reload not supported on this OS",
+        )
+
+    try:
+        os.kill(current.pid, sighup)
+    except ProcessLookupError:
+        try:
+            pid_path().unlink(missing_ok=True)
+        except OSError:
+            pass
+        return DaemonStatus(running=False, detail="daemon gone")
+    except OSError as exc:
+        return DaemonStatus(
+            running=True,
+            pid=current.pid,
+            detail=f"reload failed: {exc}",
+        )
+    return DaemonStatus(running=True, pid=current.pid, detail="reload signaled")

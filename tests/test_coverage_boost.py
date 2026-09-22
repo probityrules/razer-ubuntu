@@ -198,12 +198,15 @@ def test_start_daemon_background() -> None:
 
 
 def test_short_label_keys() -> None:
-    from tartarus_v2.input.keys import short_label
+    from tartarus_v2.input.keys import KEYMAP_LAYOUT, short_label
 
     assert short_label("stick_up") == "↑"
     assert short_label("key_01") == "01"
     assert short_label("mode") == "mode"
     assert short_label("custom") == "custom"
+    flat = {k for row in KEYMAP_LAYOUT for k in row if k}
+    for n in range(1, 21):
+        assert f"key_{n:02d}" in flat
 
 
 def test_permissions_status_and_fix(monkeypatch: pytest.MonkeyPatch) -> None:

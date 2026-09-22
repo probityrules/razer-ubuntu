@@ -42,6 +42,25 @@ class Daemon:
         if self._remapper is not None:
             self._remapper.profile = self.profile
 
+    def reload_active_profile(self) -> None:
+        """Re-read active profile from disk (bindings / lighting changes from GUI)."""
+        name = get_active_profile_name()
+        log.info("Reloading profile %s", name)
+        self.profile_name = name
+        try:
+            self.profile = load_profile(name)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Profile reload failed: %s", exc)
+            return
+        if self._chroma is not None:
+            try:
+                self._chroma.apply_lighting(self.profile.get("lighting") or {})
+            except Exception as exc:  # noqa: BLE001
+                log.error("Failed to apply lighting after reload: %s", exc)
+        if self._remapper is not None:
+            self._remapper.profile = self.profile
+            self._remapper._hypershift_held = False  # noqa: SLF001
+
     def start(self) -> None:
         set_active_profile_name(self.profile_name)
         self.profile = load_profile(self.profile_name)
@@ -69,14 +88,22 @@ class Daemon:
             on_profile_switch=self._on_profile_switch,
         )
 
-        def _handle_sig(_signum: int, _frame: Any) -> None:
+        def _handle_stop(_signum: int, _frame: Any) -> None:
             log.info("Signal received; stopping")
             self._stop = True
             if self._remapper is not None:
-                self._remapper._running = False
+                self._remapper._running = False  # noqa: SLF001
 
-        signal.signal(signal.SIGINT, _handle_sig)
-        signal.signal(signal.SIGTERM, _handle_sig)
+        def _handle_reload(_signum: int, _frame: Any) -> None:
+            try:
+                self.reload_active_profile()
+            except Exception as exc:  # noqa: BLE001
+                log.error("SIGHUP reload error: %s", exc)
+
+        signal.signal(signal.SIGINT, _handle_stop)
+        signal.signal(signal.SIGTERM, _handle_stop)
+        if hasattr(signal, "SIGHUP"):
+            signal.signal(signal.SIGHUP, _handle_reload)
 
         try:
             self._remapper.start()

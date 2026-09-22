@@ -20,6 +20,13 @@ LOGICAL_TO_CODE: dict[str, int] = {
     "key_13": 45,   # KEY_X
     "key_14": 46,   # KEY_C
     "key_15": 47,   # KEY_V
+    # Bottom keypad row (Synapse 16–20). Codes match common stock HID → EV_KEY
+    # translations that do not collide with key_01–15 / mode / thumb above.
+    "key_16": 29,   # KEY_LEFTCTRL
+    "key_17": 125,  # KEY_LEFTMETA (Super)
+    "key_18": 100,  # KEY_RIGHTALT
+    "key_19": 127,  # KEY_COMPOSE
+    "key_20": 54,   # KEY_RIGHTSHIFT
     "mode": 56,     # KEY_LEFTALT / MODE_SWITCH
     "thumb": 57,    # KEY_SPACE
     "stick_up": 103,
@@ -64,12 +71,13 @@ ALL_LOGICAL_KEYS = sorted(LOGICAL_TO_CODE.keys()) + [
 ]
 
 # Approximate Tartarus V2 top-down layout (logical names). None = empty spacer.
-# Main pad is 5×3; thumb module sits below with stick + mode/thumb + scroll wheel.
+# Main pad is 5×4 (keys 01–20); thumb module sits below with stick + mode/thumb + scroll.
 KEYMAP_LAYOUT: list[list[str | None]] = [
     ["key_01", "key_02", "key_03", "key_04", "key_05", None, None],
     ["key_06", "key_07", "key_08", "key_09", "key_10", None, "scroll_up"],
     ["key_11", "key_12", "key_13", "key_14", "key_15", None, "scroll_click"],
-    [None, None, "stick_up", None, None, None, "scroll_down"],
+    ["key_16", "key_17", "key_18", "key_19", "key_20", None, "scroll_down"],
+    [None, None, "stick_up", None, None, None, None],
     [None, "stick_left", None, "stick_right", None, None, None],
     ["mode", None, "stick_down", None, "thumb", None, None],
 ]
@@ -81,7 +89,7 @@ Tartarus V2 logical key map (for bindings / profile JSON)
   [key_01] [key_02] [key_03] [key_04] [key_05]
   [key_06] [key_07] [key_08] [key_09] [key_10]              [scroll_up]
   [key_11] [key_12] [key_13] [key_14] [key_15]           [scroll_click]
-                                                           [scroll_down]
+  [key_16] [key_17] [key_18] [key_19] [key_20]            [scroll_down]
                     [stick_up]
           [stick_left]    [stick_right]
   [mode]          [stick_down]                 [thumb]
