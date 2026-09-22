@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import shutil
 from pathlib import Path
@@ -131,7 +132,8 @@ def load_profile(name: str = DEFAULT_PROFILE_NAME) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Profile not found: {name} ({path})")
     data = json.loads(path.read_text(encoding="utf-8"))
-    data.setdefault("name", name)
+    # Filename stem is the source of truth — never trust a stale embedded "name".
+    data["name"] = name
     data.setdefault("hypershift_key", "mode")
     data.setdefault("standard", {"bindings": {}})
     data.setdefault("hypershift", {"bindings": {}})
@@ -141,7 +143,8 @@ def load_profile(name: str = DEFAULT_PROFILE_NAME) -> dict[str, Any]:
 
 def save_profile(profile: dict[str, Any], name: str | None = None) -> Path:
     name = name or profile.get("name") or DEFAULT_PROFILE_NAME
-    profile = dict(profile)
+    # Deep-copy so callers cannot accidentally share nested bindings across profiles.
+    profile = copy.deepcopy(profile)
     profile["name"] = name
     path = profiles_dir() / f"{name}.json"
     path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")

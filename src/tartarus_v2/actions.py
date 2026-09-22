@@ -141,20 +141,24 @@ def apply_active_profile() -> str:
 
 
 def duplicate_profile(source: str, dest: str) -> Path:
-    data = prof.load_profile(source)
+    import copy
+
+    data = copy.deepcopy(prof.load_profile(source))
     data["name"] = dest
     return prof.save_profile(data, dest)
 
 
 def create_profile(name: str, *, clone_active: bool = True) -> Path:
     """Create a new profile from the active one (or the built-in default)."""
+    import copy
+
     name = name.strip()
     if not name:
         raise ValueError("Profile name required")
     if any(p["name"] == name for p in list_profiles()):
         raise ValueError(f"Profile already exists: {name}")
     if clone_active:
-        data = dict(prof.load_profile(prof.get_active_profile_name()))
+        data = copy.deepcopy(prof.load_profile(prof.get_active_profile_name()))
     else:
         data = prof.default_profile()
     data["name"] = name

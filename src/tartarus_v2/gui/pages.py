@@ -673,19 +673,28 @@ def build_bindings_page(window: Any) -> Any:
         import copy
 
         try:
-            data = ctrl.load_bindings(name)
+            from tartarus_v2.profiles import get_active_profile_name
+
+            requested = name or get_active_profile_name()
+            data = ctrl.load_bindings(requested)
+            # Always key drafts by the filename/stem we asked for, not a stale JSON name.
+            data["name"] = requested
             state["draft"] = copy.deepcopy(data)
             state["baseline"] = copy.deepcopy(data)
-            state["profile"] = data.get("name")
+            state["profile"] = requested
             hs = data.get("hypershift_key", "mode")
-            if hs in keys:
-                hs_row.set_selected(keys.index(hs))
+            suppress_profile["busy"] = True
+            try:
+                if hs in keys:
+                    hs_row.set_selected(keys.index(hs))
+            finally:
+                suppress_profile["busy"] = False
             _sync_keymap()
             _fill_entries_for(state.get("selected"))
             _set_dirty(False)
-            status.set_subtitle(f"Loaded {state['profile']}")
+            status.set_subtitle(f"Loaded {requested}")
             if toast:
-                _toast(window, f"Loaded {state['profile']}")
+                _toast(window, f"Loaded {requested}")
         except Exception as exc:  # noqa: BLE001
             _error(window, "Could not load profile", str(exc))
 
@@ -698,9 +707,9 @@ def build_bindings_page(window: Any) -> Any:
         if not (0 <= idx < len(profile_names)):
             return
         name = profile_names[idx]
-        if state.get("profile") == name and state.get("draft"):
+        if state.get("profile") == name and state.get("draft") and not state.get("dirty"):
             return
-        if state.get("dirty"):
+        if state.get("dirty") and state.get("profile") != name:
             # Discard unpublished edits when switching profiles.
             _toast(window, "Discarded unpublished binding edits")
         try:
@@ -741,6 +750,8 @@ def build_bindings_page(window: Any) -> Any:
         _stage_entry("hypershift", hs_entry)
 
     def _on_hs_key(_row: Any = None, _pspec: Any = None) -> None:
+        if suppress_profile["busy"]:
+            return
         if not state.get("draft"):
             return
         key = keys[hs_row.get_selected()]
@@ -842,7 +853,28 @@ def build_bindings_page(window: Any) -> Any:
     scroll.set_child(content)
     outer.append(scroll)
 
-    outer.connect("map", lambda *_: _start_highlight())
+    def _on_bindings_map(_w: Any = None) -> None:
+        _reload_profile_combo()
+        # Pick up activation done on the Profiles page.
+        try:
+            from tartarus_v2.profiles import get_active_profile_name
+
+            active = get_active_profile_name()
+            if active in profile_names:
+                suppress_profile["busy"] = True
+                try:
+                    profile_row.set_selected(profile_names.index(active))
+                finally:
+                    suppress_profile["busy"] = False
+            if state.get("dirty") and state.get("profile") == active:
+                _start_highlight()
+                return
+            _load_named(active, toast=False)
+        except Exception:  # noqa: BLE001
+            pass
+        _start_highlight()
+
+    outer.connect("map", _on_bindings_map)
     outer.connect("unmap", lambda *_: _stop_highlight())
 
     _reload_profile_combo()

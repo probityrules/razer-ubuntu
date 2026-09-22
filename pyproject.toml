@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tartarus-v2"
-version = "0.6.0"
+version = "0.6.1"
 description = "Standalone userspace driver for Razer Tartarus V2 on Linux (RGB, remap, Hypershift, macros, GUI)"
 readme = "README.md"
 requires-python = ">=3.10"
