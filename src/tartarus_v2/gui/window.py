@@ -106,6 +106,7 @@ def create_main_window(app: Any, debug: bool = False) -> Any:
 
     # App menu
     menu = Gio.Menu()
+    menu.append("Report issue…", "app.report_issue")
     menu.append("About Tartarus V2", "app.about")
     menu.append("Uninstall…", "app.uninstall")
     menu.append("Quit", "app.quit")

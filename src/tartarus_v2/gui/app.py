@@ -26,6 +26,7 @@ def run_gui(debug: bool = False) -> int:
     gi.require_version("Adw", "1")
     from gi.repository import Adw, Gio, Gtk
 
+    from tartarus_v2.gui.report_issue import show_report_issue_dialog
     from tartarus_v2.gui.tray import attach_tray
     from tartarus_v2.gui.window import create_main_window, show_about
 
@@ -52,6 +53,10 @@ def run_gui(debug: bool = False) -> int:
     def on_about(_action: Gio.SimpleAction, _param: None) -> None:
         if state["window"] is not None:
             show_about(state["window"])
+
+    def on_report_issue(_action: Gio.SimpleAction, _param: None) -> None:
+        if state["window"] is not None:
+            show_report_issue_dialog(state["window"])
 
     def on_quit(_action: Gio.SimpleAction, _param: None) -> None:
         app.quit()
@@ -92,6 +97,10 @@ def run_gui(debug: bool = False) -> int:
     about_action = Gio.SimpleAction.new("about", None)
     about_action.connect("activate", on_about)
     app.add_action(about_action)
+
+    report_action = Gio.SimpleAction.new("report_issue", None)
+    report_action.connect("activate", on_report_issue)
+    app.add_action(report_action)
 
     uninstall_action = Gio.SimpleAction.new("uninstall", None)
     uninstall_action.connect("activate", on_uninstall)

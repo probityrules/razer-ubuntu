@@ -19,3 +19,18 @@ The package:
 ## CI release
 
 `.github/workflows/release-deb.yml` runs on every push to `main`. If `pyproject.toml` version changed vs the previous commit, it builds the `.deb` and creates GitHub Release `v<version>` with the artifact attached.
+
+### Notefully key (Report issue)
+
+Set a **repository variable** (Settings → Secrets and variables → Actions → Variables):
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `NOTEFULLY_PROJECT_KEY` | recommended | Public `nfk_…` key baked into `EMBEDDED_PROJECT_KEY` in the `.deb` |
+| `NOTEFULLY_ENDPOINT` | optional | Override default relay URL |
+
+Local builds:
+
+```bash
+NOTEFULLY_PROJECT_KEY='nfk_…' ./packaging/build-deb.sh
+```

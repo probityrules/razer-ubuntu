@@ -31,9 +31,9 @@ No OpenRazer runtime dependency. Supports RGB lighting, key remapping, **Hypersh
 On each version bump to `main`, CI builds a `.deb` and attaches it to a GitHub Release (`vX.Y.Z`):
 
 ```bash
-# Example for v0.4.0 — use the latest release tag/assets from GitHub:
-curl -LO "https://github.com/probityrules/razer-ubuntu/releases/latest/download/tartarus-v2_0.4.0_all.deb"
-sudo apt install ./tartarus-v2_0.4.0_all.deb
+# Example for v0.5.0 — use the latest release tag/assets from GitHub:
+curl -LO "https://github.com/probityrules/razer-ubuntu/releases/latest/download/tartarus-v2_0.5.0_all.deb"
+sudo apt install ./tartarus-v2_0.5.0_all.deb
 # postinst adds you to input+plugdev when it can detect your user
 # log out/in, then:
 tartarus-v2 gui
@@ -68,6 +68,16 @@ Native **Libadwaita** app (`Adw.Application` + sidebar navigation):
 4. **Bindings** — clickable keymap with **Normal / Hypershift** toggle, profile switcher, link to Profiles
 5. **Daemon** — start/stop, **Start at login** autostart, debug toggle, **Fix permissions**
 6. **Diagnose** — live EV_KEY listen (pauses/restarts daemon as needed), dump/copy/save
+
+App menu → **Report issue…** opens a Notefully-style dialog (kind, author, note). Submits to your Notefully relay with a diagnose dump and log tail attached in the report context (no screenshots).
+
+Release `.deb` builds embed the public project key from the GitHub Actions repository variable **`NOTEFULLY_PROJECT_KEY`** (optional **`NOTEFULLY_ENDPOINT`**). Overrides still work:
+
+- Env: `TARTARUS_NOTEFULLY_KEY` (and optional `TARTARUS_NOTEFULLY_ENDPOINT`)
+- Or `~/.config/tartarus-v2/notefully.json` → `{ "projectKey": "nfk_…" }`
+- Default endpoint: `https://make.makefullystudios.com/notefully`
+
+If no key is baked in or configured, the dialog asks for one and saves it under that config path.
 
 Device and Daemon pages warn when you are missing `input`/`plugdev` and offer **Fix permissions** (polkit/`pkexec`). The `.deb` postinst also tries to add the installing user to those groups automatically.
 
@@ -118,11 +128,11 @@ On Ubuntu/Debian (or CI):
 
 ```bash
 chmod +x packaging/build-deb.sh
-./packaging/build-deb.sh
+NOTEFULLY_PROJECT_KEY='nfk_…' ./packaging/build-deb.sh   # optional embed
 # → dist/tartarus-v2_<version>_all.deb
 ```
 
-Pushing a **version bump** on `main` (see `bcp`) triggers `.github/workflows/release-deb.yml`, which builds the `.deb` and publishes a GitHub Release.
+Pushing a **version bump** on `main` (see `bcp`) triggers `.github/workflows/release-deb.yml`, which builds the `.deb` and publishes a GitHub Release. CI embeds `vars.NOTEFULLY_PROJECT_KEY` when that repository variable is set.
 
 ## Development (Windows)
 

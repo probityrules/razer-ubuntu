@@ -65,8 +65,18 @@ jobs:
 
       - name: Build .deb
         if: steps.ver.outputs.should_release == 'true' && steps.existing.outputs.should_release == 'true'
+        env:
+          # Repo Settings → Secrets and variables → Actions → Variables
+          # Public Notefully project key (nfk_…); safe to store as a variable.
+          NOTEFULLY_PROJECT_KEY: ${{ vars.NOTEFULLY_PROJECT_KEY }}
+          NOTEFULLY_ENDPOINT: ${{ vars.NOTEFULLY_ENDPOINT }}
         run: |
           chmod +x packaging/build-deb.sh packaging/postinst.sh packaging/postrm.sh
+          if [ -z "${NOTEFULLY_PROJECT_KEY:-}" ]; then
+            echo "::warning::vars.NOTEFULLY_PROJECT_KEY is unset — Report issue will need a local key"
+          else
+            echo "Embedding Notefully project key from repository variable"
+          fi
           ./packaging/build-deb.sh
 
       - name: Create GitHub Release

@@ -31,6 +31,60 @@ mkdir -p \
 python3 -m pip install --upgrade pip
 python3 -m pip install . --no-deps --target "${STAGE}/usr/lib/tartarus-v2/site-packages"
 
+# Bake Notefully public project key / endpoint into the staged package when provided
+# (CI: repo variable NOTEFULLY_PROJECT_KEY; local: export before build-deb.sh).
+NOTEFULLY_PKG="${STAGE}/usr/lib/tartarus-v2/site-packages/tartarus_v2/notefully.py"
+if [[ -n "${NOTEFULLY_PROJECT_KEY:-}${NOTEFULLY_ENDPOINT:-}" ]]; then
+  export NOTEFULLY_PKG
+  export NOTEFULLY_PROJECT_KEY="${NOTEFULLY_PROJECT_KEY:-}"
+  export NOTEFULLY_ENDPOINT="${NOTEFULLY_ENDPOINT:-}"
+  python3 - <<'PY'
+import os
+import re
+import sys
+from pathlib import Path
+
+path = Path(os.environ["NOTEFULLY_PKG"])
+text = path.read_text(encoding="utf-8")
+key = os.environ.get("NOTEFULLY_PROJECT_KEY", "").strip()
+endpoint = os.environ.get("NOTEFULLY_ENDPOINT", "").strip().rstrip("/")
+
+if key:
+    if not re.fullmatch(r"nfk_[A-Za-z0-9_-]+", key):
+        print(f"Invalid NOTEFULLY_PROJECT_KEY (expected nfk_…): {key[:24]!r}", file=sys.stderr)
+        sys.exit(1)
+    text, n = re.subn(
+        r'^EMBEDDED_PROJECT_KEY = ".*"$',
+        f"EMBEDDED_PROJECT_KEY = {key!r}",
+        text,
+        count=1,
+        flags=re.M,
+    )
+    if n != 1:
+        print("Could not patch EMBEDDED_PROJECT_KEY in notefully.py", file=sys.stderr)
+        sys.exit(1)
+    print(f"==> Embedded Notefully project key ({key[:8]}…)")
+
+if endpoint:
+    if not re.fullmatch(r"https?://[^\s\"']+", endpoint):
+        print(f"Invalid NOTEFULLY_ENDPOINT: {endpoint!r}", file=sys.stderr)
+        sys.exit(1)
+    text, n = re.subn(
+        r'^DEFAULT_ENDPOINT = ".*"$',
+        f"DEFAULT_ENDPOINT = {endpoint!r}",
+        text,
+        count=1,
+        flags=re.M,
+    )
+    if n != 1:
+        print("Could not patch DEFAULT_ENDPOINT in notefully.py", file=sys.stderr)
+        sys.exit(1)
+    print(f"==> Embedded Notefully endpoint ({endpoint})")
+
+path.write_text(text, encoding="utf-8")
+PY
+fi
+
 # CLI/GUI launcher (system python3 + bundled package; GI from distro)
 cat > "${STAGE}/usr/bin/tartarus-v2" <<'EOF'
 #!/bin/sh
