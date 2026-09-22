@@ -203,10 +203,27 @@ def test_short_label_keys() -> None:
     assert short_label("stick_up") == "↑"
     assert short_label("key_01") == "01"
     assert short_label("mode") == "mode"
+    assert short_label("thumb") == "20"
     assert short_label("custom") == "custom"
     flat = {k for row in KEYMAP_LAYOUT for k in row if k}
-    for n in range(1, 21):
+    for n in range(1, 20):
         assert f"key_{n:02d}" in flat
+    assert "thumb" in flat
+    assert "scroll_up" in flat
+    assert "mode" in flat
+
+
+def test_logicals_for_output_code() -> None:
+    from tartarus_v2 import key_listen
+
+    profile = {
+        "hypershift_key": "mode",
+        "standard": {"bindings": {"key_14": "r", "key_01": "1"}},
+        "hypershift": {"bindings": {"key_14": "F16"}},
+    }
+    # Without real evdev KEY_* attrs this may be empty on some hosts; still must not crash.
+    result = key_listen.logicals_for_output_code(profile, 19, hypershift=False)
+    assert isinstance(result, list)
 
 
 def test_key_listen_describe_and_format() -> None:

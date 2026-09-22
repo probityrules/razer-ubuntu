@@ -104,7 +104,7 @@ def create_main_window(app: Any, debug: bool = False) -> Any:
     split.set_sidebar(sidebar_page)
     split.set_content(content_page)
 
-    # App menu
+    # App menu + persistent daemon LED (all pages)
     menu = Gio.Menu()
     menu.append("Report issue…", "app.report_issue")
     menu.append("About Tartarus V2", "app.about")
@@ -113,6 +113,50 @@ def create_main_window(app: Any, debug: bool = False) -> Any:
     menu_btn = Gtk.MenuButton(icon_name="open-menu-symbolic")
     menu_btn.set_menu_model(menu)
     content_header.pack_end(menu_btn)
+
+    daemon_led = Gtk.Label(label="●")
+    daemon_led.set_tooltip_text("Remap daemon")
+    daemon_led.add_css_class("title-2")
+    content_header.pack_start(daemon_led)
+
+    css = Gtk.CssProvider()
+    css.load_from_data(
+        b"""
+        label.daemon-on { color: #2ec27e; }
+        label.daemon-off { color: #9a9996; }
+        """
+    )
+    from gi.repository import Gdk, GLib
+
+    display = Gdk.Display.get_default()
+    if display is not None:
+        Gtk.StyleContext.add_provider_for_display(
+            display,
+            css,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+
+    def _paint_daemon_led(running: bool) -> None:
+        daemon_led.remove_css_class("daemon-on")
+        daemon_led.remove_css_class("daemon-off")
+        if running:
+            daemon_led.add_css_class("daemon-on")
+            daemon_led.set_tooltip_text("Remap daemon: ON")
+        else:
+            daemon_led.add_css_class("daemon-off")
+            daemon_led.set_tooltip_text("Remap daemon: OFF")
+
+    def _poll_daemon_led() -> bool:
+        try:
+            from tartarus_v2.daemon_control import status as daemon_status
+
+            _paint_daemon_led(daemon_status().running)
+        except Exception:  # noqa: BLE001
+            _paint_daemon_led(False)
+        return True
+
+    _paint_daemon_led(False)
+    GLib.timeout_add_seconds(2, _poll_daemon_led)
 
     toast_overlay.set_child(split)
     window.set_content(toast_overlay)

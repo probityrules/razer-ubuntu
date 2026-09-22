@@ -20,15 +20,14 @@ LOGICAL_TO_CODE: dict[str, int] = {
     "key_13": 45,   # KEY_X
     "key_14": 46,   # KEY_C
     "key_15": 47,   # KEY_V
-    # Bottom keypad row (Synapse 16–20). Codes match common stock HID → EV_KEY
-    # translations that do not collide with key_01–15 / mode / thumb above.
+    # Bottom keypad row (Synapse 16–19). key_20 is shown as the thumb key in the UI.
     "key_16": 29,   # KEY_LEFTCTRL
     "key_17": 125,  # KEY_LEFTMETA (Super)
     "key_18": 100,  # KEY_RIGHTALT
     "key_19": 127,  # KEY_COMPOSE
-    "key_20": 54,   # KEY_RIGHTSHIFT
+    "key_20": 54,   # KEY_RIGHTSHIFT (also editable via combo; pad shows thumb as 20)
     "mode": 56,     # KEY_LEFTALT / MODE_SWITCH
-    "thumb": 57,    # KEY_SPACE
+    "thumb": 57,    # KEY_SPACE — Synapse "20" / thumb
     "stick_up": 103,
     "stick_left": 105,
     "stick_right": 106,
@@ -70,34 +69,34 @@ ALL_LOGICAL_KEYS = sorted(LOGICAL_TO_CODE.keys()) + [
     "scroll_click",
 ]
 
-# Approximate Tartarus V2 top-down layout (logical names). None = empty spacer.
-# Main pad is 5×4 (keys 01–20); thumb module sits below with stick + mode/thumb + scroll.
+# Top-down layout matching Synapse-style numbering the user expects:
+#   01–05 / 06–10 / 11–15 / 16–19
+#   scr up, scr, scr down
+#   mode, lf, up, rt, dn, thumb(20)
 KEYMAP_LAYOUT: list[list[str | None]] = [
-    ["key_01", "key_02", "key_03", "key_04", "key_05", None, None],
-    ["key_06", "key_07", "key_08", "key_09", "key_10", None, "scroll_up"],
-    ["key_11", "key_12", "key_13", "key_14", "key_15", None, "scroll_click"],
-    ["key_16", "key_17", "key_18", "key_19", "key_20", None, "scroll_down"],
-    [None, None, "stick_up", None, None, None, None],
-    [None, "stick_left", None, "stick_right", None, None, None],
-    ["mode", None, "stick_down", None, "thumb", None, None],
+    ["key_01", "key_02", "key_03", "key_04", "key_05"],
+    ["key_06", "key_07", "key_08", "key_09", "key_10"],
+    ["key_11", "key_12", "key_13", "key_14", "key_15"],
+    ["key_16", "key_17", "key_18", "key_19", None],
+    ["scroll_up", "scroll_click", "scroll_down", None, None],
+    ["mode", "stick_left", "stick_up", "stick_right", "stick_down", "thumb"],
 ]
 
 KEYMAP_ASCII = """
 Tartarus V2 logical key map (for bindings / profile JSON)
 =========================================================
 
-  [key_01] [key_02] [key_03] [key_04] [key_05]
-  [key_06] [key_07] [key_08] [key_09] [key_10]              [scroll_up]
-  [key_11] [key_12] [key_13] [key_14] [key_15]           [scroll_click]
-  [key_16] [key_17] [key_18] [key_19] [key_20]            [scroll_down]
-                    [stick_up]
-          [stick_left]    [stick_right]
-  [mode]          [stick_down]                 [thumb]
+  [01] [02] [03] [04] [05]
+  [06] [07] [08] [09] [10]
+  [11] [12] [13] [14] [15]
+  [16] [17] [18] [19]
+  [Scr↑] [Scr•] [Scr↓]
+  [mode] [←] [↑] [→] [↓] [20/thumb]
 
 Notes:
   - mode is often used as Hypershift (hold for secondary layer)
-  - thumb is the hyperesponse thumb key (default Space)
-  - stick_* is the 8-way thumb pad (cardinals mapped; diagonals not separate)
+  - thumb is labeled 20 (hyperesponse thumb key; default Space)
+  - key_20 remains a valid binding id in profiles / combo lists
 """.strip()
 
 
@@ -112,7 +111,7 @@ def short_label(logical: str) -> str:
         "scroll_down": "Scr↓",
         "scroll_click": "Scr•",
         "mode": "mode",
-        "thumb": "thumb",
+        "thumb": "20",
     }
     if logical in aliases:
         return aliases[logical]

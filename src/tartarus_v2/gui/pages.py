@@ -109,38 +109,60 @@ def _add_permissions_group(page: Any, window: Any, ctrl: DaemonController | None
 
 
 def build_device_page(window: Any) -> Any:
-    from gi.repository import Adw, Gtk
+    from gi.repository import Adw, GLib, Gtk
 
     ctrl = DeviceController()
     page = Adw.PreferencesPage(title="Device", name="device")
-    group = Adw.PreferencesGroup(title="Tartarus V2", description="USB device info (CLI: info)")
+    group = Adw.PreferencesGroup(
+        title="Tartarus V2",
+        description="USB device info (updates automatically while this page is open)",
+    )
     firmware = Adw.ActionRow(title="Firmware", subtitle="—")
     serial = Adw.ActionRow(title="Serial", subtitle="—")
     brightness = Adw.ActionRow(title="Brightness", subtitle="—")
     for row in (firmware, serial, brightness):
         group.add(row)
 
-    def _refresh(_btn: Any = None) -> None:
+    poll: dict[str, Any] = {"source": None, "busy": False}
+
+    def _refresh(*, silent: bool = True) -> None:
+        if poll["busy"]:
+            return
+        poll["busy"] = True
+
         def work() -> dict:
             return ctrl.refresh_device(debug=getattr(window, "debug", False))
 
         def done(result: Any, error: BaseException | None) -> None:
+            poll["busy"] = False
             if error:
-                _error(window, "Device error", str(error))
+                firmware.set_subtitle("unavailable")
+                serial.set_subtitle(str(error)[:80])
+                brightness.set_subtitle("—")
+                if not silent:
+                    _error(window, "Device error", str(error))
                 return
             firmware.set_subtitle(str(result.get("firmware", "")))
             serial.set_subtitle(str(result.get("serial", "")))
             brightness.set_subtitle(str(result.get("brightness", "")))
-            _toast(window, "Device info refreshed")
+            if not silent:
+                _toast(window, "Device info refreshed")
 
         run_in_thread(work, done)
 
-    btn = Gtk.Button(label="Refresh")
-    btn.add_css_class("suggested-action")
-    btn.connect("clicked", _refresh)
-    header = Adw.ActionRow(title="Actions")
-    header.add_suffix(btn)
-    group.add(header)
+    def _start_poll(_w: Any = None) -> None:
+        _refresh(silent=True)
+        if poll["source"] is None:
+            poll["source"] = GLib.timeout_add_seconds(8, lambda: (_refresh(silent=True), True)[1])
+
+    def _stop_poll(_w: Any = None) -> None:
+        src = poll.get("source")
+        if src is not None:
+            GLib.source_remove(src)
+            poll["source"] = None
+
+    page.connect("map", _start_poll)
+    page.connect("unmap", _stop_poll)
     page.add(group)
     _add_permissions_group(page, window)
     return page
@@ -503,9 +525,10 @@ def build_profiles_page(window: Any) -> Any:
 
 
 def build_bindings_page(window: Any) -> Any:
-    from gi.repository import Adw, Gtk
+    from gi.repository import Adw, GLib, Gtk
 
     from tartarus_v2.gui.keymap import build_keymap_grid
+    from tartarus_v2.key_listen import KeyHighlightMonitor
 
     ctrl = BindingsController()
     profiles_ctrl = ProfilesController()
@@ -514,7 +537,10 @@ def build_bindings_page(window: Any) -> Any:
     prefs = Adw.PreferencesPage(title="Bindings", name="bindings")
     group = Adw.PreferencesGroup(
         title="Edit binding",
-        description="Pick Normal or Hypershift, select a key on the layout, then save.",
+        description=(
+            "Changes stay in a draft until you press Apply — then all keys are "
+            "written and the daemon reloads."
+        ),
     )
 
     profile_list = Gtk.StringList()
@@ -527,96 +553,98 @@ def build_bindings_page(window: Any) -> Any:
     profiles_btn.add_css_class("flat")
     profile_row.add_suffix(profiles_btn)
 
-    layer_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-    layer_box.add_css_class("linked")
-    normal_btn = Gtk.ToggleButton(label="Normal")
-    hs_btn = Gtk.ToggleButton(label="Hypershift")
-    hs_btn.set_group(normal_btn)
-    normal_btn.set_active(True)
-    layer_box.append(normal_btn)
-    layer_box.append(hs_btn)
-    layer_mode_row = Adw.ActionRow(title="Layer")
-    layer_mode_row.add_suffix(layer_box)
-
     hs_row = Adw.ComboRow(title="Hypershift key")
     hs_row.set_model(Gtk.StringList.new(keys))
-    key_row = Adw.ComboRow(title="Physical key")
-    key_row.set_model(Gtk.StringList.new(keys))
-    type_row = Adw.ComboRow(title="Binding type")
-    type_row.set_model(Gtk.StringList.new(["key", "macro", "profile_next", "profile_prev"]))
 
-    binding_entry = Gtk.Entry(placeholder_text="e.g. a  or  ctrl+c  or  F1")
-    bind_row = Adw.ActionRow(title="Binding")
-    bind_row.add_suffix(binding_entry)
-    status = Adw.ActionRow(title="Status", subtitle="Load a profile layer to edit")
+    selected_row = Adw.ActionRow(title="Selected key", subtitle="Click a key on the layout")
+    normal_entry = Gtk.Entry(placeholder_text="Normal binding, e.g. a  or  ctrl+c")
+    normal_row = Adw.ActionRow(title="Normal")
+    normal_row.add_suffix(normal_entry)
+    hs_entry = Gtk.Entry(placeholder_text="Hypershift binding, e.g. F1")
+    hs_entry_row = Adw.ActionRow(title="Hypershift")
+    hs_entry_row.add_suffix(hs_entry)
+
+    status = Adw.ActionRow(title="Status", subtitle="Load a profile to edit")
+    listen_row = Adw.ActionRow(title="Key highlight", subtitle="Starting…")
+
     state: dict[str, Any] = {
         "profile": None,
-        "data": None,
-        "layer": "standard",
-        "pending": 0,
+        "draft": None,
+        "baseline": None,
+        "selected": None,
+        "dirty": False,
+        "suppress_entries": False,
     }
     suppress_profile: dict[str, bool] = {"busy": False}
+    highlight: dict[str, Any] = {"monitor": None}
 
     apply_btn = Gtk.Button(label="Apply")
     apply_btn.add_css_class("suggested-action")
     apply_btn.set_sensitive(False)
 
-    def _set_pending(delta: int = 0, *, clear: bool = False) -> None:
-        if clear:
-            state["pending"] = 0
-        else:
-            state["pending"] = max(0, int(state["pending"]) + delta)
-        n = int(state["pending"])
-        apply_btn.set_sensitive(n > 0)
-        if n > 0:
-            apply_btn.set_tooltip_text(f"{n} unsaved-to-daemon change(s) — click Apply to reload")
-        else:
-            apply_btn.set_tooltip_text("No pending remaps to apply")
+    def _draft_bindings(layer: str) -> dict[str, Any]:
+        data = state.get("draft") or {}
+        return dict((data.get(layer) or {}).get("bindings") or {})
 
-    def current_layer() -> str:
-        return "hypershift" if hs_btn.get_active() else "standard"
+    def _set_dirty(dirty: bool) -> None:
+        state["dirty"] = dirty
+        apply_btn.set_sensitive(dirty)
+        apply_btn.set_tooltip_text(
+            "Save all draft bindings and reload the daemon"
+            if dirty
+            else "No pending binding changes"
+        )
+        if dirty and state.get("profile"):
+            status.set_subtitle(f"{state['profile']} · unpublished changes")
 
-    def current_layer_label() -> str:
-        return "Hypershift" if hs_btn.get_active() else "Normal"
+    def _sync_keymap() -> None:
+        keymap._keymap_set_bindings(  # noqa: SLF001
+            standard=_draft_bindings("standard"),
+            hypershift=_draft_bindings("hypershift"),
+        )
+        mon = highlight.get("monitor")
+        if mon is not None and state.get("draft"):
+            mon.set_profile(state["draft"])
+
+    def _fill_entries_for(logical: str | None) -> None:
+        state["suppress_entries"] = True
+        try:
+            if not logical:
+                selected_row.set_subtitle("Click a key on the layout")
+                normal_entry.set_text("")
+                hs_entry.set_text("")
+                return
+            selected_row.set_subtitle(logical)
+
+            def _as_text(value: Any) -> str:
+                if value is None:
+                    return ""
+                if isinstance(value, str):
+                    return value
+                if isinstance(value, dict):
+                    kind = value.get("type", "key")
+                    if kind == "macro":
+                        steps = value.get("steps") or []
+                        if steps and isinstance(steps[0], dict):
+                            return str(steps[0].get("tap") or "")
+                        return "macro"
+                    if kind == "key":
+                        return str(value.get("key") or value.get("keys") or "")
+                    return str(kind)
+                return str(value)
+
+            normal_entry.set_text(_as_text(_draft_bindings("standard").get(logical)))
+            hs_entry.set_text(_as_text(_draft_bindings("hypershift").get(logical)))
+        finally:
+            state["suppress_entries"] = False
 
     def _select_physical(logical: str) -> None:
-        if logical in keys:
-            key_row.set_selected(keys.index(logical))
-            data = state.get("data") or {}
-            layer = current_layer()
-            bindings = (data.get(layer) or {}).get("bindings") or {}
-            value = bindings.get(logical)
-            if isinstance(value, str):
-                type_row.set_selected(0)
-                binding_entry.set_text(value)
-            elif isinstance(value, dict):
-                kind = value.get("type", "key")
-                if kind == "macro":
-                    type_row.set_selected(1)
-                    steps = value.get("steps") or []
-                    tip = steps[0].get("tap", "") if steps and isinstance(steps[0], dict) else ""
-                    binding_entry.set_text(str(tip))
-                elif kind == "profile_next":
-                    type_row.set_selected(2)
-                    binding_entry.set_text("")
-                elif kind == "profile_prev":
-                    type_row.set_selected(3)
-                    binding_entry.set_text("")
-                else:
-                    type_row.set_selected(0)
-                    binding_entry.set_text("")
-            else:
-                binding_entry.set_text("")
-            status.set_subtitle(f"Selected {logical} ({current_layer_label()})")
+        state["selected"] = logical
+        keymap._keymap_set_selected(logical)  # noqa: SLF001
+        _fill_entries_for(logical)
+        status.set_subtitle(f"Editing {logical}")
 
-    keymap = build_keymap_grid(_select_physical, layer_label="Normal")
-
-    def _sync_keymap_bindings() -> None:
-        data = state.get("data") or {}
-        layer = current_layer()
-        bindings = (data.get(layer) or {}).get("bindings") or {}
-        keymap._keymap_set_layer_label(current_layer_label())  # noqa: SLF001
-        keymap._keymap_set_bindings(bindings)  # noqa: SLF001
+    keymap = build_keymap_grid(_select_physical)
 
     def _reload_profile_combo(*, prefer: str | None = None) -> None:
         nonlocal profile_names
@@ -642,16 +670,20 @@ def build_bindings_page(window: Any) -> Any:
             suppress_profile["busy"] = False
 
     def _load_named(name: str | None = None, *, toast: bool = True) -> None:
+        import copy
+
         try:
             data = ctrl.load_bindings(name)
-            state["data"] = data
+            state["draft"] = copy.deepcopy(data)
+            state["baseline"] = copy.deepcopy(data)
             state["profile"] = data.get("name")
             hs = data.get("hypershift_key", "mode")
             if hs in keys:
                 hs_row.set_selected(keys.index(hs))
-            _sync_keymap_bindings()
-            _set_pending(clear=True)
-            status.set_subtitle(f"Loaded {state['profile']} · {current_layer_label()}")
+            _sync_keymap()
+            _fill_entries_for(state.get("selected"))
+            _set_dirty(False)
+            status.set_subtitle(f"Loaded {state['profile']}")
             if toast:
                 _toast(window, f"Loaded {state['profile']}")
         except Exception as exc:  # noqa: BLE001
@@ -666,20 +698,16 @@ def build_bindings_page(window: Any) -> Any:
         if not (0 <= idx < len(profile_names)):
             return
         name = profile_names[idx]
-        if state.get("profile") == name and state.get("data"):
+        if state.get("profile") == name and state.get("draft"):
             return
+        if state.get("dirty"):
+            # Discard unpublished edits when switching profiles.
+            _toast(window, "Discarded unpublished binding edits")
         try:
             profiles_ctrl.activate_profile(name)
             _load_named(name)
         except Exception as exc:  # noqa: BLE001
             _error(window, "Could not switch profile", str(exc))
-
-    def _on_layer_toggled(_btn: Any = None) -> None:
-        state["layer"] = current_layer()
-        _sync_keymap_bindings()
-        status.set_subtitle(
-            f"{state.get('profile') or '—'} · {current_layer_label()}"
-        )
 
     def _go_profiles(_b: Any = None) -> None:
         navigate = getattr(window, "navigate_to", None)
@@ -688,86 +716,119 @@ def build_bindings_page(window: Any) -> Any:
         else:
             _toast(window, "Open Profiles from the sidebar")
 
-    def _save_key(_b: Any = None) -> None:
-        try:
-            if not state["profile"]:
-                _load_named()
-            logical = keys[key_row.get_selected()]
-            btype = ["key", "macro", "profile_next", "profile_prev"][type_row.get_selected()]
-            text = binding_entry.get_text().strip()
-            if btype == "key":
-                value: Any = text
-            elif btype == "macro":
-                value = {"type": "macro", "steps": [{"tap": text or "a"}]}
-            else:
-                value = {"type": btype}
-            layer = current_layer()
-            data = state["data"] or ctrl.load_bindings(state["profile"])
-            bindings = dict((data.get(layer) or {}).get("bindings") or {})
-            bindings[logical] = value
-            hs_key = keys[hs_row.get_selected()]
-            profile = state["profile"] or data["name"]
-            state["data"] = ctrl.save_bindings(profile, layer, bindings, hs_key)
-            state["profile"] = profile
-            _sync_keymap_bindings()
-            _set_pending(1)
-            status.set_subtitle(f"Saved {logical} on {current_layer_label()} · pending Apply")
-            _toast(window, f"Saved {logical} — press Apply to reload the daemon")
-        except Exception as exc:  # noqa: BLE001
-            _error(window, "Could not save binding", str(exc))
+    def _stage_entry(layer: str, entry: Any) -> None:
+        if state["suppress_entries"]:
+            return
+        logical = state.get("selected")
+        if not logical or not state.get("draft"):
+            return
+        text = entry.get_text().strip()
+        data = state["draft"]
+        data.setdefault(layer, {})
+        bindings = dict((data.get(layer) or {}).get("bindings") or {})
+        if text:
+            bindings[logical] = text
+        else:
+            bindings.pop(logical, None)
+        data[layer]["bindings"] = bindings
+        _sync_keymap()
+        _set_dirty(True)
 
-    def _set_hs(_b: Any = None) -> None:
-        try:
-            if not state["profile"]:
-                _load_named()
-            key = keys[hs_row.get_selected()]
-            state["data"] = ctrl.set_hypershift_key(state["profile"], key)
-            _set_pending(1)
-            _toast(window, f"Hypershift key: {key} — press Apply to reload the daemon")
-        except Exception as exc:  # noqa: BLE001
-            _error(window, "Could not set Hypershift key", str(exc))
+    def _on_normal_changed(_e: Any = None) -> None:
+        _stage_entry("standard", normal_entry)
+
+    def _on_hs_changed(_e: Any = None) -> None:
+        _stage_entry("hypershift", hs_entry)
+
+    def _on_hs_key(_row: Any = None, _pspec: Any = None) -> None:
+        if not state.get("draft"):
+            return
+        key = keys[hs_row.get_selected()]
+        if state["draft"].get("hypershift_key") == key:
+            return
+        state["draft"]["hypershift_key"] = key
+        _set_dirty(True)
 
     def _apply(_b: Any = None) -> None:
-        if int(state["pending"]) <= 0:
+        if not state.get("dirty") or not state.get("draft") or not state.get("profile"):
             return
         try:
+            draft = state["draft"]
+            profile = state["profile"]
+            hs_key = draft.get("hypershift_key") or keys[hs_row.get_selected()]
+            # Persist both layers + hypershift key in one shot.
+            std = dict((draft.get("standard") or {}).get("bindings") or {})
+            hyp = dict((draft.get("hypershift") or {}).get("bindings") or {})
+            ctrl.save_bindings(profile, "standard", std, hs_key)
+            data = ctrl.save_bindings(profile, "hypershift", hyp, hs_key)
+            state["draft"] = data
+            import copy
+
+            state["baseline"] = copy.deepcopy(data)
             detail = ctrl.apply_bindings()
-            _set_pending(clear=True)
+            _set_dirty(False)
             if "not running" in detail.lower():
-                _toast(window, "Bindings saved on disk; start the daemon to use them")
+                _toast(window, "Bindings saved; start the daemon to use them")
             elif "signaled" in detail.lower() or "reload" in detail.lower():
-                _toast(window, "Applied — daemon reloaded active profile")
+                _toast(window, "Applied — all bindings saved, daemon reloaded")
             else:
-                _toast(window, f"Apply: {detail}")
+                _toast(window, f"Applied ({detail})")
             status.set_subtitle(f"Applied ({detail})")
+            _sync_keymap()
         except Exception as exc:  # noqa: BLE001
             _error(window, "Could not apply bindings", str(exc))
 
-    profiles_btn.connect("clicked", _go_profiles)
-    normal_btn.connect("toggled", _on_layer_toggled)
-    hs_btn.connect("toggled", _on_layer_toggled)
-    profile_row.connect("notify::selected", _on_profile_selected)
+    def _on_highlight(pressed: set[str], mode: str) -> None:
+        def apply() -> bool:
+            keymap._keymap_set_pressed(pressed)  # noqa: SLF001
+            if mode == "physical":
+                listen_row.set_subtitle("Physical EV_KEY (daemon off)")
+            elif mode == "virtual":
+                listen_row.set_subtitle("Mapped output (daemon on)")
+            elif mode == "stopped":
+                listen_row.set_subtitle("Idle")
+            else:
+                listen_row.set_subtitle(mode)
+            return False
 
-    for row in (profile_row, layer_mode_row, hs_row, key_row, type_row, bind_row, status):
-        group.add(row)
-    for title, cb in (
-        ("Save binding", _save_key),
-        ("Set Hypershift key", _set_hs),
-    ):
-        row = Adw.ActionRow(title=title)
-        b = Gtk.Button(label="Run")
-        b.connect("clicked", cb)
-        row.add_suffix(b)
+        GLib.idle_add(apply)
+
+    def _start_highlight() -> None:
+        mon = highlight.get("monitor")
+        if mon is not None:
+            mon.stop()
+        mon = KeyHighlightMonitor(_on_highlight)
+        if state.get("draft"):
+            mon.set_profile(state["draft"])
+        highlight["monitor"] = mon
+        try:
+            mon.start()
+        except Exception as exc:  # noqa: BLE001
+            listen_row.set_subtitle(f"Unavailable: {exc}")
+
+    def _stop_highlight() -> None:
+        mon = highlight.get("monitor")
+        if mon is not None:
+            mon.stop()
+            highlight["monitor"] = None
+        keymap._keymap_set_pressed(set())  # noqa: SLF001
+
+    profiles_btn.connect("clicked", _go_profiles)
+    profile_row.connect("notify::selected", _on_profile_selected)
+    hs_row.connect("notify::selected", _on_hs_key)
+    normal_entry.connect("changed", _on_normal_changed)
+    hs_entry.connect("changed", _on_hs_changed)
+
+    for row in (profile_row, hs_row, selected_row, normal_row, hs_entry_row, listen_row, status):
         group.add(row)
 
     apply_row = Adw.ActionRow(
-        title="Apply",
-        subtitle="Reload the running daemon with pending binding changes",
+        title="Apply all",
+        subtitle="Write every draft binding and reload the running daemon",
     )
     apply_btn.connect("clicked", _apply)
     apply_row.add_suffix(apply_btn)
     group.add(apply_row)
-    _set_pending(clear=True)
     prefs.add(group)
 
     outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -780,6 +841,9 @@ def build_bindings_page(window: Any) -> Any:
     content.append(prefs)
     scroll.set_child(content)
     outer.append(scroll)
+
+    outer.connect("map", lambda *_: _start_highlight())
+    outer.connect("unmap", lambda *_: _stop_highlight())
 
     _reload_profile_combo()
     if profile_names:
@@ -884,7 +948,8 @@ def build_diagnose_page(window: Any) -> Any:
         title="Live key listen",
         description=(
             "Shows EV_KEY codes for Tartarus presses and the active profile mapping. "
-            "If the remap daemon is running, you will be asked to pause it while listening."
+            "The remap daemon is paused automatically while this page is open, "
+            "and restarted when you leave Diagnose."
         ),
     )
     live_status = Adw.ActionRow(title="Status", subtitle="Idle")
@@ -927,7 +992,12 @@ def build_diagnose_page(window: Any) -> Any:
     reload_btn = Gtk.Button(label="Reload profile")
     reload_btn.set_sensitive(False)
 
-    listen_state: dict[str, Any] = {"paused_daemon": False, "active": False}
+    listen_state: dict[str, Any] = {
+        "paused_daemon": False,
+        "active": False,
+        "page_focused": False,
+        "pause_token": 0,
+    }
 
     def _set_listening_ui(active: bool) -> None:
         listen_state["active"] = active
@@ -946,8 +1016,8 @@ def build_diagnose_page(window: Any) -> Any:
             log_buf.set_text("\n".join(log_lines) if log_lines else "")
             status = str(payload.get("status", ""))
             if not payload.get("running", True) and "Stopped" in status and listen_state["active"]:
-                # Listener died unexpectedly — restore daemon if we paused it.
-                _finish_listen(restart_daemon=True, from_callback=True)
+                # Listener died unexpectedly — keep daemon paused while page is focused.
+                _finish_listen(restart_daemon=False, from_callback=True)
             return False
 
         GLib.idle_add(apply)
@@ -959,8 +1029,6 @@ def build_diagnose_page(window: Any) -> Any:
             paused = " (daemon paused)" if listen_state["paused_daemon"] else ""
             _toast(window, f"Listening for Tartarus keys{paused}")
         except Exception as exc:  # noqa: BLE001
-            if listen_state["paused_daemon"]:
-                _restart_paused_daemon()
             _set_listening_ui(False)
             _error(window, "Could not start key listen", str(exc))
 
@@ -984,57 +1052,102 @@ def build_diagnose_page(window: Any) -> Any:
             if not from_callback:
                 _error(window, "Could not stop key listen", str(exc))
         _set_listening_ui(False)
-        live_status.set_subtitle("Idle")
+        if listen_state["page_focused"]:
+            live_status.set_subtitle("Idle · remap daemon paused (Diagnose page)")
+        else:
+            live_status.set_subtitle("Idle")
         pressed_label.set_label("(none)")
         if restart_daemon:
             _restart_paused_daemon()
-        else:
-            listen_state["paused_daemon"] = False
 
-    def _start_listen(_b: Any = None) -> None:
+    def _pause_daemon_for_page() -> None:
+        """Stop remap daemon so Diagnose can open Tartarus devices."""
+        if listen_state["page_focused"]:
+            return
+        listen_state["page_focused"] = True
+        listen_state["pause_token"] = int(listen_state["pause_token"]) + 1
+        token = int(listen_state["pause_token"])
+
         st = daemon_ctrl.daemon_status()
         if not st.running:
-            listen_state["paused_daemon"] = False
+            live_status.set_subtitle("Idle · remap daemon not running")
+            return
+        if listen_state["paused_daemon"]:
+            live_status.set_subtitle("Idle · remap daemon paused (Diagnose page)")
+            return
+
+        live_status.set_subtitle("Pausing remap daemon…")
+
+        def work() -> Any:
+            return daemon_ctrl.stop_daemon()
+
+        def done(result: Any, error: BaseException | None) -> None:
+            if token != int(listen_state["pause_token"]):
+                return
+            if error:
+                _error(window, "Could not pause daemon", str(error))
+                return
+            if result is not None and getattr(result, "running", False):
+                _error(
+                    window,
+                    "Could not pause daemon",
+                    getattr(result, "detail", "still running"),
+                )
+                return
+            listen_state["paused_daemon"] = True
+            if not listen_state["page_focused"]:
+                # Left Diagnose before stop finished — restore remapping.
+                _restart_paused_daemon()
+                return
+            live_status.set_subtitle("Idle · remap daemon paused (Diagnose page)")
+            _toast(window, "Remap daemon paused while on Diagnose")
+
+        run_in_thread(work, done)
+
+    def _resume_daemon_for_page() -> None:
+        """Leaving Diagnose: stop listen and restore remap daemon if we paused it."""
+        if not listen_state["page_focused"]:
+            return
+        listen_state["page_focused"] = False
+        listen_state["pause_token"] = int(listen_state["pause_token"]) + 1
+        if listen_state["active"]:
+            _finish_listen(restart_daemon=True)
+        elif listen_state["paused_daemon"]:
+            _restart_paused_daemon()
+        live_status.set_subtitle("Idle")
+
+    def _ensure_daemon_paused_then_listen() -> None:
+        st = daemon_ctrl.daemon_status()
+        if not st.running:
             _begin_listen()
             return
 
-        dialog = Adw.AlertDialog.new(
-            "Pause remap daemon?",
-            "Live key listen needs exclusive access to the Tartarus input devices. "
-            "The remap daemon is running and grabs those devices.\n\n"
-            "Stop the daemon to listen? It will be restarted automatically when you stop listening.",
-        )
-        dialog.add_response("cancel", "Cancel")
-        dialog.add_response("stop", "Stop daemon and listen")
-        dialog.set_response_appearance("stop", Adw.ResponseAppearance.SUGGESTED)
-        dialog.set_default_response("stop")
-        dialog.set_close_response("cancel")
+        def work() -> Any:
+            return daemon_ctrl.stop_daemon()
 
-        def on_response(_d: Any, response: str) -> None:
-            if response != "stop":
+        def done(result: Any, error: BaseException | None) -> None:
+            if error:
+                _error(window, "Could not pause daemon", str(error))
                 return
+            if result is not None and getattr(result, "running", False):
+                _error(
+                    window,
+                    "Could not pause daemon",
+                    getattr(result, "detail", "still running"),
+                )
+                return
+            listen_state["paused_daemon"] = True
+            _begin_listen()
 
-            def work() -> Any:
-                return daemon_ctrl.stop_daemon()
+        run_in_thread(work, done)
 
-            def done(result: Any, error: BaseException | None) -> None:
-                if error:
-                    _error(window, "Could not stop daemon", str(error))
-                    return
-                if result is not None and getattr(result, "running", False):
-                    _error(window, "Could not stop daemon", getattr(result, "detail", "still running"))
-                    return
-                listen_state["paused_daemon"] = True
-                _toast(window, "Daemon stopped for live listen")
-                _begin_listen()
-
-            run_in_thread(work, done)
-
-        dialog.connect("response", on_response)
-        dialog.present(window)
+    def _start_listen(_b: Any = None) -> None:
+        # Page focus normally pauses the daemon already; stop residual if needed.
+        _ensure_daemon_paused_then_listen()
 
     def _stop_listen(_b: Any = None) -> None:
-        _finish_listen(restart_daemon=True)
+        # Stay on Diagnose → keep daemon paused until the page loses focus.
+        _finish_listen(restart_daemon=False)
 
     def _reload_profile(_b: Any = None) -> None:
         try:
@@ -1129,7 +1242,13 @@ def build_diagnose_page(window: Any) -> Any:
         ("Open preview", _preview, False),
     ):
         row = Adw.ActionRow(title=title)
-        b = Gtk.Button(label="Run")
+        labels = {
+            "Run diagnose": "Run",
+            "Copy report": "Copy",
+            "Save report": "Save",
+            "Open preview": "Open",
+        }
+        b = Gtk.Button(label=labels.get(title, "Run"))
         if suggested:
             b.add_css_class("suggested-action")
         b.connect("clicked", cb)
@@ -1150,8 +1269,18 @@ def build_diagnose_page(window: Any) -> Any:
     scroll.set_child(content)
     outer.append(scroll)
 
+    def _on_page_map(_w: Any) -> None:
+        _pause_daemon_for_page()
+
+    def _on_page_unmap(_w: Any) -> None:
+        _resume_daemon_for_page()
+
+    outer.connect("map", _on_page_map)
+    outer.connect("unmap", _on_page_unmap)
+
     # Stop listener and restore daemon when window closes
     def _cleanup(*_args: Any) -> None:
+        listen_state["page_focused"] = False
         if listen_state["active"] or listen_state["paused_daemon"]:
             _finish_listen(restart_daemon=True)
 

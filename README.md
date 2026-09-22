@@ -31,9 +31,9 @@ No OpenRazer runtime dependency. Supports RGB lighting, key remapping, **Hypersh
 On each version bump to `main`, CI builds a `.deb` and attaches it to a GitHub Release (`vX.Y.Z`):
 
 ```bash
-# Example for v0.5.1 — use the latest release tag/assets from GitHub:
-curl -LO "https://github.com/probityrules/razer-ubuntu/releases/latest/download/tartarus-v2_0.5.1_all.deb"
-sudo apt install ./tartarus-v2_0.5.1_all.deb
+# Example for v0.6.0 — use the latest release tag/assets from GitHub:
+curl -LO "https://github.com/probityrules/razer-ubuntu/releases/latest/download/tartarus-v2_0.6.0_all.deb"
+sudo apt install ./tartarus-v2_0.6.0_all.deb
 # postinst adds you to input+plugdev when it can detect your user
 # log out/in, then:
 tartarus-v2 gui
@@ -65,9 +65,11 @@ Native **Libadwaita** app (`Adw.Application` + sidebar navigation):
 1. **Device** — firmware / serial / brightness (`info`)
 2. **Lighting** — effects, colours, brightness (`set-effect` / `set-brightness`)
 3. **Profiles** — activate / add profile; **Advanced…** for JSON, duplicate, folder
-4. **Bindings** — clickable keymap with **Normal / Hypershift** toggle, profile switcher, link to Profiles
+4. **Bindings** — layout with Normal + Hypershift per key, live press highlight, draft edits + **Apply all**
 5. **Daemon** — start/stop, **Start at login** autostart, debug toggle, **Fix permissions**
-6. **Diagnose** — live EV_KEY listen (pauses/restarts daemon as needed), dump/copy/save
+6. **Diagnose** — live EV_KEY listen (daemon pauses on this page, restarts when you leave), dump/copy/save
+
+The header shows a persistent **daemon LED** (green = running, grey = stopped). Device info refreshes automatically while that page is open.
 
 App menu → **Report issue…** opens a Notefully-style dialog (kind, author, note). Submits to your Notefully relay with a diagnose dump and log tail attached in the report context (no screenshots).
 

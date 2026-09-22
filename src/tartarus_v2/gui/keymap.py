@@ -1,4 +1,4 @@
-"""Clickable Tartarus V2 keymap widget (GTK4)."""
+"""Clickable Tartarus V2 keymap widget (GTK4) with N/HS labels and press highlight."""
 
 from __future__ import annotations
 
@@ -9,13 +9,22 @@ from tartarus_v2.input.keys import KEYMAP_LAYOUT, short_label
 
 def _format_binding(value: Any) -> str:
     if value is None:
-        return "(unset)"
+        return "—"
     if isinstance(value, str):
-        return value
+        return value or "—"
     if isinstance(value, dict):
         kind = value.get("type", "action")
         if kind == "macro":
+            steps = value.get("steps") or []
+            if steps and isinstance(steps[0], dict) and steps[0].get("tap"):
+                return f"m:{steps[0]['tap']}"
             return "macro"
+        if kind == "key":
+            return str(value.get("key") or value.get("keys") or "key")
+        if kind == "profile_next":
+            return "next"
+        if kind == "profile_prev":
+            return "prev"
         return str(kind)
     return str(value)
 
@@ -24,10 +33,10 @@ def build_keymap_grid(
     on_select: Callable[[str], None],
     *,
     selected: str | None = None,
-    layer_label: str = "Normal",
-    bindings: dict[str, Any] | None = None,
+    standard_bindings: dict[str, Any] | None = None,
+    hypershift_bindings: dict[str, Any] | None = None,
 ) -> Any:
-    """Return a Gtk.Box with a labeled grid; clicking a key calls on_select(logical)."""
+    """Return a Gtk.Box grid; each cell shows id + Normal/Hypershift bindings."""
     from gi.repository import Gtk
 
     outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -36,80 +45,114 @@ def build_keymap_grid(
     outer.set_margin_top(8)
     outer.set_margin_bottom(8)
 
-    title = Gtk.Label(label=f"Device layout — {layer_label}")
+    title = Gtk.Label(label="Device layout")
     title.add_css_class("heading")
     title.set_xalign(0)
     outer.append(title)
 
     hint = Gtk.Label(
-        label="Click a key to select it. Toggle Normal / Hypershift above to edit each layer."
+        label=(
+            "Click a key to edit. N = Normal, H = Hypershift. "
+            "Pressed keys light up (physical EV_KEY when daemon is off; "
+            "mapped output when daemon is on)."
+        )
     )
     hint.add_css_class("dim-label")
     hint.set_wrap(True)
     hint.set_xalign(0)
     outer.append(hint)
 
-    grid = Gtk.Grid(column_spacing=6, row_spacing=6)
+    grid = Gtk.Grid(column_spacing=8, row_spacing=8)
     grid.set_halign(Gtk.Align.CENTER)
-    buttons: dict[str, Any] = {}
-    current_bindings: dict[str, Any] = dict(bindings or {})
 
-    def _style_selected() -> None:
-        for name, btn in buttons.items():
-            if selected is not None and name == selected:
-                btn.add_css_class("suggested-action")
-            else:
-                btn.remove_css_class("suggested-action")
+    cells: dict[str, dict[str, Any]] = {}
+    std = dict(standard_bindings or {})
+    hs = dict(hypershift_bindings or {})
+    pressed: set[str] = set()
+    selected_name = selected
 
-    def _refresh_tooltips() -> None:
-        for name, btn in buttons.items():
-            tip = name
-            if name in current_bindings:
-                tip = f"{name} → {_format_binding(current_bindings[name])}"
-            btn.set_tooltip_text(tip)
+    def _cell_label(logical: str) -> str:
+        n = _format_binding(std.get(logical))
+        h = _format_binding(hs.get(logical))
+        return f"{short_label(logical)}\nN:{n}\nH:{h}"
+
+    def _style_cell(logical: str) -> None:
+        info = cells.get(logical)
+        if info is None:
+            return
+        btn = info["button"]
+        btn.remove_css_class("suggested-action")
+        btn.remove_css_class("destructive-action")
+        btn.remove_css_class("opaque")
+        if logical in pressed:
+            btn.add_css_class("destructive-action")
+        elif selected_name is not None and logical == selected_name:
+            btn.add_css_class("suggested-action")
+
+    def _refresh_all() -> None:
+        for logical, info in cells.items():
+            info["button"].set_label(_cell_label(logical))
+            tip = (
+                f"{logical}\n"
+                f"Normal → {_format_binding(std.get(logical))}\n"
+                f"Hypershift → {_format_binding(hs.get(logical))}"
+            )
+            info["button"].set_tooltip_text(tip)
+            _style_cell(logical)
 
     for r, row in enumerate(KEYMAP_LAYOUT):
         for c, logical in enumerate(row):
             if logical is None:
                 spacer = Gtk.Label(label="")
-                spacer.set_size_request(48, 36)
+                spacer.set_size_request(72, 52)
                 grid.attach(spacer, c, r, 1, 1)
                 continue
 
-            btn = Gtk.Button(label=short_label(logical))
-            btn.set_size_request(56, 40)
+            btn = Gtk.Button(label=_cell_label(logical))
+            btn.set_size_request(88, 64)
             btn.add_css_class("flat")
             btn.add_css_class("keymap-key")
 
             def _clicked(_button: Any, name: str = logical) -> None:
-                nonlocal selected
-                selected = name
-                _style_selected()
+                nonlocal selected_name
+                selected_name = name
+                _refresh_all()
                 on_select(name)
 
             btn.connect("clicked", _clicked)
-            buttons[logical] = btn
+            cells[logical] = {"button": btn}
             grid.attach(btn, c, r, 1, 1)
 
-    _style_selected()
-    _refresh_tooltips()
+    _refresh_all()
     outer.append(grid)
 
-    def set_selected(name: str) -> None:
-        nonlocal selected
-        selected = name
-        _style_selected()
+    def set_selected(name: str | None) -> None:
+        nonlocal selected_name
+        selected_name = name
+        _refresh_all()
 
-    def set_layer_label(label: str) -> None:
-        title.set_label(f"Device layout — {label}")
+    def set_bindings(
+        *,
+        standard: dict[str, Any] | None = None,
+        hypershift: dict[str, Any] | None = None,
+    ) -> None:
+        nonlocal std, hs
+        if standard is not None:
+            std = dict(standard)
+        if hypershift is not None:
+            hs = dict(hypershift)
+        _refresh_all()
 
-    def set_bindings(new_bindings: dict[str, Any] | None) -> None:
-        nonlocal current_bindings
-        current_bindings = dict(new_bindings or {})
-        _refresh_tooltips()
+    def set_pressed(logicals: set[str] | list[str]) -> None:
+        nonlocal pressed
+        pressed = set(logicals)
+        _refresh_all()
 
-    outer._keymap_buttons = buttons  # noqa: SLF001
+    outer._keymap_cells = cells  # noqa: SLF001
     outer._keymap_set_selected = set_selected  # noqa: SLF001
-    outer._keymap_set_layer_label = set_layer_label  # noqa: SLF001
     outer._keymap_set_bindings = set_bindings  # noqa: SLF001
+    outer._keymap_set_pressed = set_pressed  # noqa: SLF001
+    # Back-compat no-ops for older callers
+    outer._keymap_set_layer_label = lambda _label: None  # noqa: SLF001
+    outer._keymap_buttons = {k: v["button"] for k, v in cells.items()}  # noqa: SLF001
     return outer

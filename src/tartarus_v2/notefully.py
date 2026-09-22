@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import uuid
@@ -23,6 +24,10 @@ DEFAULT_ENDPOINT = "https://make.makefullystudios.com/notefully"
 EMBEDDED_PROJECT_KEY = ""
 REPORT_NAME = "tartarus-v2"
 MAX_DIAGNOSTICS_CHARS = 180_000
+# Notefully widget max; delivery plugins only render context.console.
+MAX_CONSOLE_LINES = 80
+# Extra log lines appended to the human-readable message (always visible in inbox).
+MAX_MESSAGE_LOG_CHARS = 24_000
 KINDS = ("bug", "idea", "other")
 
 
@@ -115,38 +120,114 @@ def load_config() -> NotefullyConfig:
 
 
 def gather_diagnostics(*, include_probe: bool = False) -> str:
-    """Build a diagnose dump suitable for attaching to a Notefully report."""
+    """Build a fresh diagnose dump at call time (never reuse a prior GUI dump)."""
+    from datetime import datetime, timezone
+
     from tartarus_v2.diagnose import build_report
 
+    generated = datetime.now(timezone.utc).isoformat()
     try:
+        # Always regenerate: live system snapshot for this submit only.
         text = build_report(listen_seconds=0.0, skip_probe=not include_probe)
     except Exception as exc:  # noqa: BLE001
         text = f"(diagnose failed: {exc})"
+    header = (
+        f"tartarus-v2 notefully diagnose\n"
+        f"generated_utc={generated}\n"
+        f"(fresh snapshot at submit; not a cached Diagnose-page dump)\n"
+    )
+    text = header + "\n" + text
     if len(text) > MAX_DIAGNOSTICS_CHARS:
         text = text[:MAX_DIAGNOSTICS_CHARS] + "\n\n…(truncated)…"
     return text
 
 
-def gather_log_tail(limit: int = 120) -> str:
+def _flush_logging() -> None:
+    """Ensure file handlers write buffered lines before we read the log."""
+    root = logging.getLogger("tartarus_v2")
+    for handler in list(root.handlers):
+        try:
+            handler.flush()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def gather_log_tail(limit: int = 200) -> str:
+    """Read recent daemon/GUI log lines from disk (after flushing handlers)."""
+    _flush_logging()
     path = log_path()
     try:
+        if not path.exists():
+            return f"(no log file yet at {path})"
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if not lines:
+            return f"(log file empty: {path})"
         return "\n".join(lines[-limit:])
     except OSError as exc:
         return f"(could not read {path}: {exc})"
+
+
+def _guess_log_level(line: str) -> str:
+    for part in line.split()[:8]:
+        token = part.upper().rstrip(":")
+        if token == "CRITICAL":
+            return "error"
+        if token == "ERROR":
+            return "error"
+        if token in ("WARNING", "WARN"):
+            return "warn"
+        if token == "INFO":
+            return "info"
+        if token == "DEBUG":
+            return "log"
+    return "log"
+
+
+def log_tail_as_console(limit: int = MAX_CONSOLE_LINES) -> list[dict[str, Any]]:
+    """Convert app log lines into Notefully ``context.console`` entries."""
+    import time
+
+    raw = gather_log_tail(limit=max(limit, 1))
+    now = int(time.time() * 1000)
+    entries: list[dict[str, Any]] = []
+    for i, line in enumerate(raw.splitlines()):
+        text = line.strip()
+        if not text:
+            continue
+        entries.append(
+            {
+                "level": _guess_log_level(text),
+                "text": text[:2000],
+                "at": now - (len(raw.splitlines()) - i) * 10,
+            }
+        )
+    if not entries:
+        entries.append(
+            {
+                "level": "warn",
+                "text": f"No tartarus-v2 log lines found at {log_path()}",
+                "at": now,
+            }
+        )
+    return entries[-limit:]
 
 
 def build_context(
     *,
     author: str,
     diagnostics: str | None,
+    console: list[dict[str, Any]] | None = None,
+    log_tail: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    tail = log_tail if log_tail is not None else gather_log_tail()
+    console_lines = console if console is not None else log_tail_as_console()
     ctx: dict[str, Any] = {
         "url": "app://tartarus-v2",
         "title": "Tartarus V2",
         "userAgent": f"tartarus-v2/{__version__} ({platform.system()}; {platform.machine()})",
         "os": platform.platform(),
+        "browser": "tartarus-v2-native",
         "language": os.environ.get("LANG") or os.environ.get("LC_ALL") or "",
         "timezone": _timezone_name(),
         "app": {
@@ -160,13 +241,47 @@ def build_context(
             "displayName": author or None,
         },
         "author": author or "Anonymous",
-        "logTail": gather_log_tail(),
+        # Notefully delivery / Tracker console panel (widget-compatible shape).
+        "console": console_lines,
+        "logTail": tail,
     }
     if diagnostics is not None:
         ctx["diagnostics"] = diagnostics
     if extra:
         ctx.update(extra)
     return ctx
+
+
+def _compose_message(note: str, *, diagnostics: str) -> str:
+    """User note plus a fresh diagnose dump (includes current log tail in §9)."""
+    diag = diagnostics
+    if len(diag) > MAX_MESSAGE_LOG_CHARS:
+        diag = (
+            diag[:MAX_MESSAGE_LOG_CHARS]
+            + "\n…(truncated in message; full copy in context.diagnostics)…"
+        )
+    parts = [
+        note.strip(),
+        "",
+        "---",
+        "## diagnose dump (generated at submit)",
+        "```",
+        diag,
+        "```",
+    ]
+    text = "\n".join(parts)
+    max_total = MAX_DIAGNOSTICS_CHARS + 8_000
+    if len(text) > max_total:
+        text = text[:max_total] + "\n…(truncated)…"
+    return text
+
+
+def _checkpoint_log(note: str) -> None:
+    """Write a marker so the log has a clear report boundary before we snapshot it."""
+    log = logging.getLogger("tartarus_v2.notefully")
+    snippet = note.replace("\n", " ").strip()[:120]
+    log.info("Preparing Notefully report: %s", snippet or "(empty note)")
+    _flush_logging()
 
 
 def _timezone_name() -> str:
@@ -198,11 +313,11 @@ def submit_report(
     message: str,
     kind: str = "bug",
     author: str = "",
-    include_diagnostics: bool = True,
+    include_diagnostics: bool = True,  # noqa: ARG001 — always gathered fresh; kept for callers
     config: NotefullyConfig | None = None,
     timeout: float = 45.0,
 ) -> SubmitResult:
-    """POST a text report (+ optional diagnose dump in context) to Notefully."""
+    """POST a text report with a fresh diagnose dump (+ console log) to Notefully."""
     cfg = config or load_config()
     if not cfg.configured:
         return SubmitResult(
@@ -222,15 +337,28 @@ def submit_report(
     if typed_author:
         save_author(typed_author)
     reporter = typed_author or "Anonymous"
-    diagnostics = gather_diagnostics() if include_diagnostics else None
+
+    # Fresh snapshot only: checkpoint → flush → rebuild diagnose + log (no cache).
+    _checkpoint_log(note)
+    _flush_logging()
+    diagnostics = gather_diagnostics()
+    log_tail = gather_log_tail()
+    console = log_tail_as_console()
+    message_body = _compose_message(note, diagnostics=diagnostics)
+
     fields = {
-        "message": note,
+        "message": message_body,
         "kind": kind_id,
         "version": __version__,
         "author": reporter,
         "name": REPORT_NAME,
         "context": json.dumps(
-            build_context(author=reporter, diagnostics=diagnostics),
+            build_context(
+                author=reporter,
+                diagnostics=diagnostics,
+                console=console,
+                log_tail=log_tail,
+            ),
             ensure_ascii=False,
         ),
         "annotations": "[]",

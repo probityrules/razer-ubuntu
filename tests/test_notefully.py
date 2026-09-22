@@ -72,15 +72,22 @@ def test_submit_requires_message() -> None:
     assert "note" in result.error.lower()
 
 
+@patch("tartarus_v2.notefully._checkpoint_log")
 @patch("tartarus_v2.notefully.gather_diagnostics", return_value="## DIAG\nok")
-@patch("tartarus_v2.notefully.gather_log_tail", return_value="log line")
+@patch("tartarus_v2.notefully.gather_log_tail", return_value="2026-01-01 INFO tartarus_v2: log line")
+@patch(
+    "tartarus_v2.notefully.log_tail_as_console",
+    return_value=[{"level": "info", "text": "2026-01-01 INFO tartarus_v2: log line", "at": 1}],
+)
 @patch("tartarus_v2.notefully.save_author")
 @patch("tartarus_v2.notefully.urlopen")
 def test_submit_success(
     mock_urlopen: MagicMock,
     mock_save_author: MagicMock,
+    _console: MagicMock,
     _log: MagicMock,
     _diag: MagicMock,
+    _checkpoint: MagicMock,
 ) -> None:
     payload = {"id": "nf_abc123", "version": "0.4.0", "deliveries": {}}
     resp = MagicMock()
@@ -107,12 +114,15 @@ def test_submit_success(
     req = mock_urlopen.call_args.args[0]
     assert req.full_url == "https://example.test/notefully/v1/reports"
     assert req.get_header("X-notefully-key") == "nfk_test"
-    body = req.data
-    assert b"Keys 16-19 do nothing" in body
-    assert b'name="kind"' in body
-    assert b"bug" in body
-    assert b"tartarus-v2" in body
-    assert b"## DIAG" in body
+    body = req.data.decode("utf-8", errors="replace")
+    assert "Keys 16-19 do nothing" in body
+    assert 'name="kind"' in body
+    assert "bug" in body
+    assert "tartarus-v2" in body
+    assert "## DIAG" in body
+    assert "## diagnose dump (generated at submit)" in body
+    assert '"console"' in body
+    assert "log line" in body
 
 
 def test_submit_does_not_persist_anonymous_fallback(
@@ -121,7 +131,9 @@ def test_submit_does_not_persist_anonymous_fallback(
     saved: list[str] = []
     monkeypatch.setattr(nf, "save_author", lambda a: saved.append(a))
     monkeypatch.setattr(nf, "gather_diagnostics", lambda: "")
-    monkeypatch.setattr(nf, "gather_log_tail", lambda limit=120: "")
+    monkeypatch.setattr(nf, "gather_log_tail", lambda limit=200: "empty-ish")
+    monkeypatch.setattr(nf, "log_tail_as_console", lambda limit=80: [])
+    monkeypatch.setattr(nf, "_checkpoint_log", lambda note: None)
 
     payload = {"id": "nf_x"}
     resp = MagicMock()
@@ -140,8 +152,17 @@ def test_submit_does_not_persist_anonymous_fallback(
     assert result.ok
     assert saved == []
 
+
+@patch("tartarus_v2.notefully._checkpoint_log")
+@patch("tartarus_v2.notefully.gather_log_tail", return_value="tail")
+@patch("tartarus_v2.notefully.log_tail_as_console", return_value=[])
 @patch("tartarus_v2.notefully.urlopen")
-def test_submit_http_error(mock_urlopen: MagicMock) -> None:
+def test_submit_http_error(
+    mock_urlopen: MagicMock,
+    _console: MagicMock,
+    _log: MagicMock,
+    _checkpoint: MagicMock,
+) -> None:
     err = HTTPError(
         "https://example.test/v1/reports",
         401,
@@ -159,8 +180,16 @@ def test_submit_http_error(mock_urlopen: MagicMock) -> None:
     assert "Invalid project key" in result.error
 
 
+@patch("tartarus_v2.notefully._checkpoint_log")
+@patch("tartarus_v2.notefully.gather_log_tail", return_value="tail")
+@patch("tartarus_v2.notefully.log_tail_as_console", return_value=[])
 @patch("tartarus_v2.notefully.urlopen")
-def test_submit_network_error(mock_urlopen: MagicMock) -> None:
+def test_submit_network_error(
+    mock_urlopen: MagicMock,
+    _console: MagicMock,
+    _log: MagicMock,
+    _checkpoint: MagicMock,
+) -> None:
     mock_urlopen.side_effect = URLError("connection refused")
     result = nf.submit_report(
         message="hi",
@@ -173,14 +202,64 @@ def test_submit_network_error(mock_urlopen: MagicMock) -> None:
 
 @patch("tartarus_v2.diagnose.build_report", return_value="DUMP")
 def test_gather_diagnostics(mock_build: MagicMock) -> None:
-    assert nf.gather_diagnostics() == "DUMP"
+    text = nf.gather_diagnostics()
+    assert "DUMP" in text
+    assert "generated_utc=" in text
     mock_build.assert_called_once_with(listen_seconds=0.0, skip_probe=True)
 
 
-def test_build_context_includes_diagnostics() -> None:
-    with patch.object(nf, "gather_log_tail", return_value="tail"):
+def test_build_context_includes_console_and_diagnostics() -> None:
+    with (
+        patch.object(nf, "gather_log_tail", return_value="INFO hello"),
+        patch.object(
+            nf,
+            "log_tail_as_console",
+            return_value=[{"level": "info", "text": "INFO hello", "at": 1}],
+        ),
+    ):
         ctx = nf.build_context(author="Ada", diagnostics="dump text")
     assert ctx["author"] == "Ada"
     assert ctx["diagnostics"] == "dump text"
     assert ctx["app"]["name"] == "tartarus-v2"
-    assert ctx["logTail"] == "tail"
+    assert ctx["logTail"] == "INFO hello"
+    assert ctx["console"][0]["text"] == "INFO hello"
+
+
+def test_log_tail_as_console_parses_levels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log_file = tmp_path / "tartarus-v2.log"
+    log_file.write_text(
+        "2026-01-01T00:00:00.000 INFO tartarus_v2: started\n"
+        "2026-01-01T00:00:01.000 ERROR tartarus_v2.remap: Failed to grab\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(nf, "log_path", lambda: log_file)
+    monkeypatch.setattr(nf, "_flush_logging", lambda: None)
+    entries = nf.log_tail_as_console(limit=80)
+    assert entries[-1]["level"] == "error"
+    assert "Failed to grab" in entries[-1]["text"]
+    assert entries[0]["level"] == "info"
+
+
+def test_compose_message_includes_diagnose() -> None:
+    text = nf._compose_message(
+        "pad dead",
+        diagnostics="generated_utc=now\n## DIAG",
+    )
+    assert text.startswith("pad dead")
+    assert "## diagnose dump (generated at submit)" in text
+    assert "## DIAG" in text
+
+
+def test_gather_diagnostics_is_fresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_build(**kwargs: object) -> str:
+        calls.append(kwargs)
+        return "=== COPY FROM HERE ===\nfresh-dump\n"
+
+    monkeypatch.setattr("tartarus_v2.diagnose.build_report", fake_build)
+    text = nf.gather_diagnostics()
+    assert "generated_utc=" in text
+    assert "fresh snapshot at submit" in text
+    assert "fresh-dump" in text
+    assert calls == [{"listen_seconds": 0.0, "skip_probe": True}]

@@ -287,3 +287,218 @@ def hypershift_keycode(profile: dict[str, Any] | None = None) -> int | None:
     data = profile or {}
     logical = data.get("hypershift_key") or "mode"
     return LOGICAL_TO_CODE.get(logical)
+
+
+def _resolve_binding_codes(binding: Any) -> list[int]:
+    """Best-effort keycodes a binding would emit (string / key dict only)."""
+    if binding is None:
+        return []
+    try:
+        from evdev import ecodes
+    except ImportError:
+        return []
+
+    from tartarus_v2.input.keys import OUTPUT_ALIASES
+
+    def one(token: str) -> list[int]:
+        name = token.strip()
+        if not name:
+            return []
+        if "+" in name and not name.startswith("KEY_"):
+            out: list[int] = []
+            for part in name.split("+"):
+                out.extend(one(part))
+            return out
+        lower = name.lower()
+        if lower in OUTPUT_ALIASES:
+            name = OUTPUT_ALIASES[lower]
+        if not name.startswith("KEY_") and not name.startswith("BTN_"):
+            if len(name) == 1 and name.isalnum():
+                name = f"KEY_{name.upper()}"
+            else:
+                name = f"KEY_{name.upper()}"
+        code = getattr(ecodes, name, None)
+        return [int(code)] if code is not None else []
+
+    if isinstance(binding, str):
+        return one(binding)
+    if isinstance(binding, dict) and binding.get("type", "key") == "key":
+        raw = binding.get("keys") or binding.get("key") or ""
+        if isinstance(raw, list):
+            out: list[int] = []
+            for item in raw:
+                out.extend(one(str(item)))
+            return out
+        return one(str(raw))
+    return []
+
+
+def logicals_for_output_code(profile: dict[str, Any], code: int, *, hypershift: bool) -> list[str]:
+    """Which logical keys map to this output code on the current layer."""
+    layer_name = "hypershift" if hypershift else "standard"
+    bindings = ((profile.get(layer_name) or {}).get("bindings")) or {}
+    hits: list[str] = []
+    for logical, binding in bindings.items():
+        if code in _resolve_binding_codes(binding):
+            hits.append(str(logical))
+    if not hits:
+        passthrough = CODE_TO_LOGICAL.get(code)
+        if passthrough and passthrough not in bindings:
+            hits.append(passthrough)
+    return hits
+
+
+class KeyHighlightMonitor:
+    """Lightweight press highlighter for the Bindings keymap.
+
+    Daemon off → Tartarus EV_KEY (physical). Daemon on → virtual keyboard output
+    reversed through the active profile map when possible.
+    """
+
+    def __init__(self, on_update: Callable[[set[str], str], None]) -> None:
+        self._on_update = on_update
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._devices: list[Any] = []
+        self._pressed: set[str] = set()
+        self._profile: dict[str, Any] = {}
+        self._mode = "idle"
+        self._hypershift = False
+        self._ecodes: Any | None = None
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def set_profile(self, profile: dict[str, Any]) -> None:
+        self._profile = dict(profile or {})
+
+    def start(self) -> None:
+        if self.running:
+            return
+        self._stop.clear()
+        self._pressed.clear()
+        self._hypershift = False
+        if not self._profile:
+            try:
+                self._profile = load_profile(get_active_profile_name())
+            except Exception:  # noqa: BLE001
+                self._profile = {}
+        self._thread = threading.Thread(
+            target=self._run, name="tartarus-key-highlight", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+        self._thread = None
+        for d in self._devices:
+            try:
+                d.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self._devices = []
+        self._pressed.clear()
+        self._publish("stopped")
+
+    def _publish(self, mode: str | None = None) -> None:
+        if mode is not None:
+            self._mode = mode
+        try:
+            self._on_update(set(self._pressed), self._mode)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("highlight on_update failed: %s", exc)
+
+    def _open_devices(self) -> tuple[list[Any], str]:
+        try:
+            import evdev
+            from evdev import ecodes
+        except ImportError as exc:
+            raise RuntimeError("evdev is not installed") from exc
+        self._ecodes = ecodes
+
+        # Prefer physical Tartarus nodes (daemon must be off / not grabbing).
+        physical: list[Any] = []
+        for path in evdev.list_devices():
+            try:
+                d = evdev.InputDevice(path)
+            except OSError:
+                continue
+            name = (d.name or "").lower()
+            if "tartarus" in name and "virtual" not in name:
+                physical.append(d)
+        if physical:
+            return physical, "physical"
+
+        # Daemon running: watch the remapper's uinput device.
+        virtual: list[Any] = []
+        for path in evdev.list_devices():
+            try:
+                d = evdev.InputDevice(path)
+            except OSError:
+                continue
+            if (d.name or "") == "Tartarus V2 Virtual Keyboard":
+                virtual.append(d)
+        if virtual:
+            return virtual, "virtual"
+
+        raise RuntimeError("No Tartarus input devices available for highlight")
+
+    def _run(self) -> None:
+        try:
+            self._devices, mode = self._open_devices()
+        except Exception as exc:  # noqa: BLE001
+            self._publish(f"unavailable: {exc}")
+            return
+        self._publish(mode)
+        fds = {d.fd: d for d in self._devices}
+        try:
+            while not self._stop.is_set():
+                r, _, _ = select.select(list(fds), [], [], 0.25)
+                for fd in r:
+                    try:
+                        events = list(fds[fd].read())
+                    except OSError:
+                        continue
+                    for event in events:
+                        self._handle(event, mode)
+        finally:
+            self._publish("stopped")
+
+    def _handle(self, event: Any, mode: str) -> None:
+        ecodes = self._ecodes
+        if ecodes is None:
+            return
+        if event.type != ecodes.EV_KEY or event.value == 2:
+            return
+        pressed = event.value == 1
+        code = int(event.code)
+        logicals: list[str] = []
+
+        if mode == "physical":
+            logical = CODE_TO_LOGICAL.get(code)
+            if logical:
+                hs_key = self._profile.get("hypershift_key") or "mode"
+                if logical == hs_key:
+                    self._hypershift = pressed
+                logicals = [logical]
+        else:
+            logicals = logicals_for_output_code(
+                self._profile, code, hypershift=self._hypershift
+            )
+            # Also treat hypershift modifier if the virtual device emits it.
+            hs_code = LOGICAL_TO_CODE.get(self._profile.get("hypershift_key") or "mode")
+            if hs_code is not None and code == hs_code:
+                self._hypershift = pressed
+
+        if not logicals:
+            return
+        for logical in logicals:
+            if pressed:
+                self._pressed.add(logical)
+            else:
+                self._pressed.discard(logical)
+        self._publish(mode)

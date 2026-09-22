@@ -34,7 +34,7 @@ def show_report_issue_dialog(window: Any) -> None:
     group = Adw.PreferencesGroup(
         title="Feedback",
         description=(
-            "Sent to Notefully with logs and a diagnose dump (no screenshots). "
+            "Sent to Notefully with a fresh diagnose dump and recent logs. "
             "Your reporter name is remembered for next time."
         ),
     )
@@ -95,14 +95,14 @@ def show_report_issue_dialog(window: Any) -> None:
     note_group.add(note_row)
     page.add(note_group)
 
-    opts = Adw.PreferencesGroup(title="Attachments")
-    diag_row = Adw.SwitchRow(
-        title="Include diagnostics",
-        subtitle="Device/USB/permissions dump and recent daemon log",
+    attach = Adw.PreferencesGroup(
+        title="Attachments",
+        description=(
+            "Each submit regenerates a fresh diagnose dump (USB/HID/permissions/log tail) "
+            "and attaches recent console lines. No screenshots."
+        ),
     )
-    diag_row.set_active(True)
-    opts.add(diag_row)
-    page.add(opts)
+    page.add(attach)
 
     key_row: Adw.EntryRow | None = None
     if not cfg.project_key:
@@ -153,7 +153,6 @@ def show_report_issue_dialog(window: Any) -> None:
         cancel_btn.set_sensitive(not busy)
         note_view.set_sensitive(not busy)
         author_row.set_sensitive(not busy)
-        diag_row.set_sensitive(not busy)
         if key_row is not None:
             key_row.set_sensitive(not busy)
         for btn in kind_buttons.values():
@@ -185,19 +184,17 @@ def show_report_issue_dialog(window: Any) -> None:
         author = author_row.get_text().strip()
         if author:
             save_author(author)
-        include_diag = bool(diag_row.get_active())
         kind = kind_state["kind"]
         submit_cfg = NotefullyConfig(endpoint=cfg.endpoint, project_key=project_key)
 
         set_busy(True)
-        status.set_label("Gathering diagnostics and submitting…")
+        status.set_label("Gathering a fresh diagnose dump and submitting…")
 
         def work() -> Any:
             return submit_report(
                 message=message,
                 kind=kind,
                 author=author,
-                include_diagnostics=include_diag,
                 config=submit_cfg,
             )
 
