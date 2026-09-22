@@ -31,9 +31,9 @@ No OpenRazer runtime dependency. Supports RGB lighting, key remapping, **Hypersh
 On each version bump to `main`, CI builds a `.deb` and attaches it to a GitHub Release (`vX.Y.Z`):
 
 ```bash
-# Example for v0.5.0 — use the latest release tag/assets from GitHub:
-curl -LO "https://github.com/probityrules/razer-ubuntu/releases/latest/download/tartarus-v2_0.5.0_all.deb"
-sudo apt install ./tartarus-v2_0.5.0_all.deb
+# Example for v0.5.1 — use the latest release tag/assets from GitHub:
+curl -LO "https://github.com/probityrules/razer-ubuntu/releases/latest/download/tartarus-v2_0.5.1_all.deb"
+sudo apt install ./tartarus-v2_0.5.1_all.deb
 # postinst adds you to input+plugdev when it can detect your user
 # log out/in, then:
 tartarus-v2 gui

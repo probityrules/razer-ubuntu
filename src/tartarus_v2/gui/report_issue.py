@@ -23,18 +23,12 @@ def show_report_issue_dialog(window: Any) -> None:
     dialog = Adw.Dialog()
     dialog.set_title("Report issue")
     dialog.set_content_width(520)
-    dialog.set_content_height(520)
+    dialog.set_content_height(560)
 
     toolbar = Adw.ToolbarView()
     header = Adw.HeaderBar()
+    header.set_show_end_title_buttons(True)
     toolbar.add_top_bar(header)
-
-    cancel_btn = Gtk.Button(label="Cancel")
-    header.pack_start(cancel_btn)
-
-    submit_btn = Gtk.Button(label="Submit")
-    submit_btn.add_css_class("suggested-action")
-    header.pack_end(submit_btn)
 
     page = Adw.PreferencesPage()
     group = Adw.PreferencesGroup(
@@ -75,13 +69,14 @@ def show_report_issue_dialog(window: Any) -> None:
     author_row.set_tooltip_text("Remembered on this machine and autofilled next time.")
     author_row.set_text(load_author())
     group.add(author_row)
+    page.add(group)
 
     note_group = Adw.PreferencesGroup(title="Note")
-    note_frame = Gtk.Frame()
-    note_frame.set_margin_top(6)
-    note_frame.set_margin_bottom(6)
+    note_row = Adw.ActionRow()
+    note_row.set_activatable(False)
     note_scroll = Gtk.ScrolledWindow()
     note_scroll.set_min_content_height(140)
+    note_scroll.set_hexpand(True)
     note_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
     note_view = Gtk.TextView()
     note_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
@@ -89,10 +84,16 @@ def show_report_issue_dialog(window: Any) -> None:
     note_view.set_bottom_margin(8)
     note_view.set_left_margin(8)
     note_view.set_right_margin(8)
+    note_view.set_hexpand(True)
     note_buffer = note_view.get_buffer()
     note_scroll.set_child(note_view)
-    note_frame.set_child(note_scroll)
-    note_group.add(note_frame)
+    # Prefer child over suffix so the editor gets full width.
+    try:
+        note_row.set_child(note_scroll)
+    except (AttributeError, TypeError):
+        note_row.add_suffix(note_scroll)
+    note_group.add(note_row)
+    page.add(note_group)
 
     opts = Adw.PreferencesGroup(title="Attachments")
     diag_row = Adw.SwitchRow(
@@ -101,6 +102,7 @@ def show_report_issue_dialog(window: Any) -> None:
     )
     diag_row.set_active(True)
     opts.add(diag_row)
+    page.add(opts)
 
     key_row: Adw.EntryRow | None = None
     if not cfg.project_key:
@@ -119,18 +121,31 @@ def show_report_issue_dialog(window: Any) -> None:
     status.add_css_class("dim-label")
     status.set_margin_start(12)
     status.set_margin_end(12)
-    status.set_margin_bottom(8)
+    status.set_margin_top(4)
+    status.set_margin_bottom(4)
 
-    page.add(group)
-    page.add(note_group)
-    page.add(opts)
+    # Bottom action bar — always visible (header pack_* is easy to miss / clip in Adw.Dialog).
+    actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    actions.set_halign(Gtk.Align.END)
+    actions.set_margin_top(8)
+    actions.set_margin_bottom(12)
+    actions.set_margin_start(12)
+    actions.set_margin_end(12)
+    cancel_btn = Gtk.Button(label="Cancel")
+    submit_btn = Gtk.Button(label="Submit")
+    submit_btn.add_css_class("suggested-action")
+    submit_btn.set_can_default(True)
+    actions.append(cancel_btn)
+    actions.append(submit_btn)
 
-    content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    footer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+    footer.append(status)
+    footer.append(actions)
+    toolbar.add_bottom_bar(footer)
+
     scroll = Gtk.ScrolledWindow(child=page)
     scroll.set_vexpand(True)
-    content.append(scroll)
-    content.append(status)
-    toolbar.set_content(content)
+    toolbar.set_content(scroll)
     dialog.set_child(toolbar)
 
     def set_busy(busy: bool) -> None:
@@ -143,6 +158,10 @@ def show_report_issue_dialog(window: Any) -> None:
             key_row.set_sensitive(not busy)
         for btn in kind_buttons.values():
             btn.set_sensitive(not busy)
+        if busy:
+            submit_btn.set_label("Submitting…")
+        else:
+            submit_btn.set_label("Submit")
 
     def on_cancel(_b: Any = None) -> None:
         dialog.close()
