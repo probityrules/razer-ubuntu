@@ -15,6 +15,9 @@ def test_parser_all_top_level_commands() -> None:
         ["diagnose"],
         ["diagnose", "--skip-probe", "--listen", "3", "--out", "/tmp/x.log"],
         ["daemon", "--debug", "--profile", "default"],
+        ["daemon", "--background"],
+        ["uninstall"],
+        ["fix-permissions"],
         ["set-effect", "static", "--rgb", "FF0000"],
         ["set-brightness", "200"],
         ["profile", "list"],
@@ -47,6 +50,29 @@ def test_main_diagnose(mock_diag: MagicMock) -> None:
 def test_main_daemon(mock_daemon: MagicMock) -> None:
     assert main(["daemon", "--profile", "default", "--debug"]) == 0
     mock_daemon.assert_called_once_with(profile="default", debug=True)
+
+
+@patch("tartarus_v2.cli.actions.start_daemon_background")
+def test_main_daemon_background(mock_bg: MagicMock) -> None:
+    from tartarus_v2.daemon_control import DaemonStatus
+
+    mock_bg.return_value = DaemonStatus(running=True, pid=9, detail="started")
+    assert main(["daemon", "--background"]) == 0
+    mock_bg.assert_called_once()
+
+
+@patch("tartarus_v2.cli.actions.uninstall_package", return_value="tartarus-v2 removed")
+def test_main_uninstall(mock_un: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["uninstall"]) == 0
+    assert "removed" in capsys.readouterr().out
+    mock_un.assert_called_once()
+
+
+@patch("tartarus_v2.cli.actions.fix_permissions", return_value="Added user to input,plugdev")
+def test_main_fix_permissions(mock_fix: MagicMock, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["fix-permissions"]) == 0
+    assert "input" in capsys.readouterr().out
+    mock_fix.assert_called_once()
 
 
 @patch("tartarus_v2.cli.actions.set_effect")

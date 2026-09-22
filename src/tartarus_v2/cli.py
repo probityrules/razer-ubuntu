@@ -31,6 +31,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_daemon = sub.add_parser("daemon", help="Run lighting + remapper daemon (foreground)")
     _add_common(p_daemon)
     p_daemon.add_argument("--profile", default=None, help="Profile name to load")
+    p_daemon.add_argument(
+        "--background",
+        action="store_true",
+        help="Start detached (for login autostart) and exit",
+    )
+
+    sub.add_parser("uninstall", help="Remove the tartarus-v2 package (apt/pkexec)")
+    sub.add_parser(
+        "fix-permissions",
+        help="Add current user to input+plugdev (pkexec) and reload udev",
+    )
 
     p_effect = sub.add_parser("set-effect", help="Set a lighting effect")
     _add_common(p_effect)
@@ -79,7 +90,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "daemon":
+        if getattr(args, "background", False):
+            st = actions.start_daemon_background(profile=args.profile, debug=args.debug)
+            print(st.detail + (f" pid={st.pid}" if st.pid else ""))
+            return 0 if st.running else 1
         actions.run_daemon_foreground(profile=args.profile, debug=args.debug)
+        return 0
+
+    if args.command == "uninstall":
+        print(actions.uninstall_package())
+        return 0
+
+    if args.command == "fix-permissions":
+        print(actions.fix_permissions())
         return 0
 
     if args.command == "set-effect":

@@ -8,3 +8,8 @@ Type=Application
 Categories=Settings;HardwareSettings;Utility;
 Keywords=razer;tartarus;chroma;keypad;
 StartupNotify=true
+Actions=uninstall;
+
+[Desktop Action uninstall]
+Name=Uninstall
+Exec=tartarus-v2 uninstall

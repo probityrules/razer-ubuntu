@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from typing import Any
 
 from tartarus_v2.gui.gi_check import GuiUnavailable, require_gi
 from tartarus_v2.logging_util import setup_logging
@@ -55,11 +56,46 @@ def run_gui(debug: bool = False) -> int:
     def on_quit(_action: Gio.SimpleAction, _param: None) -> None:
         app.quit()
 
+    def on_uninstall(_action: Gio.SimpleAction, _param: None) -> None:
+        from tartarus_v2 import actions
+
+        win = state["window"]
+        if win is None:
+            print(actions.uninstall_package())
+            return
+
+        dialog = Adw.AlertDialog.new(
+            "Uninstall Tartarus V2?",
+            "This removes the tartarus-v2 package (requires admin). "
+            "Profiles under ~/.cache/tartarus-v2 are kept.",
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("uninstall", "Uninstall")
+        dialog.set_response_appearance("uninstall", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+
+        def on_response(_d: Any, response: str) -> None:
+            if response != "uninstall":
+                return
+            result = actions.uninstall_package()
+            if getattr(win, "_toast_overlay", None):
+                win._toast_overlay.add_toast(Adw.Toast.new(result))
+            if "removed" in result.lower():
+                app.quit()
+
+        dialog.connect("response", on_response)
+        dialog.present(win)
+
     app.connect("activate", on_activate)
 
     about_action = Gio.SimpleAction.new("about", None)
     about_action.connect("activate", on_about)
     app.add_action(about_action)
+
+    uninstall_action = Gio.SimpleAction.new("uninstall", None)
+    uninstall_action.connect("activate", on_uninstall)
+    app.add_action(uninstall_action)
 
     quit_action = Gio.SimpleAction.new("quit", None)
     quit_action.connect("activate", on_quit)

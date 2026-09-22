@@ -78,6 +78,9 @@ class ProfilesController:
     def duplicate_profile(self, source: str, dest: str) -> Path:
         return actions.duplicate_profile(source, dest)
 
+    def create_profile(self, name: str, *, clone_active: bool = True) -> Path:
+        return actions.create_profile(name, clone_active=clone_active)
+
 
 class BindingsController:
     def logical_keys(self) -> list[str]:
@@ -108,6 +111,18 @@ class DaemonController:
 
     def daemon_status(self) -> daemon_control.DaemonStatus:
         return daemon_control.status()
+
+    def is_autostart_enabled(self) -> bool:
+        return actions.is_autostart_enabled()
+
+    def set_autostart_enabled(self, enabled: bool) -> Path:
+        return actions.set_autostart_enabled(enabled)
+
+    def permission_status(self) -> Any:
+        return actions.permission_status()
+
+    def fix_permissions(self) -> str:
+        return actions.fix_permissions()
 
 
 class DiagnoseController:
@@ -142,6 +157,9 @@ class DiagnoseController:
 class AppController:
     def launch(self, debug: bool = False) -> int:
         return actions.launch_gui(debug=debug)
+
+    def uninstall(self) -> str:
+        return actions.uninstall_package()
 
 
 PAGE_CONTROLLERS: dict[str, type] = {

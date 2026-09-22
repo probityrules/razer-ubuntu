@@ -24,6 +24,7 @@ mkdir -p \
   "${STAGE}/usr/bin" \
   "${STAGE}/usr/lib/tartarus-v2/site-packages" \
   "${STAGE}/usr/share/applications" \
+  "${STAGE}/etc/xdg/autostart" \
   "${STAGE}/lib/udev/rules.d" \
   "${OUT_DIR}"
 
@@ -42,6 +43,8 @@ install -m 644 "${ROOT}/scripts/99-tartarus-v2.rules" \
   "${STAGE}/lib/udev/rules.d/99-tartarus-v2.rules"
 install -m 644 "${ROOT}/packaging/tartarus-v2.desktop" \
   "${STAGE}/usr/share/applications/tartarus-v2.desktop"
+install -m 644 "${ROOT}/packaging/tartarus-v2-daemon.desktop" \
+  "${STAGE}/etc/xdg/autostart/tartarus-v2-daemon.desktop"
 
 cat > "${STAGE}/DEBIAN/control" <<EOF
 Package: tartarus-v2

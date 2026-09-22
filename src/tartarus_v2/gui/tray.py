@@ -32,6 +32,11 @@ class TrayController:
 
         return cycle_profile("next")
 
+    def uninstall(self) -> str:
+        from tartarus_v2 import actions
+
+        return actions.uninstall_package()
+
     def quit_app(self) -> str:
         return "quit"
 
@@ -42,6 +47,7 @@ def menu_action_ids() -> tuple[str, ...]:
         "start_daemon",
         "stop_daemon",
         "cycle_profile_next",
+        "uninstall",
         "quit_app",
     )
 
@@ -99,6 +105,40 @@ def attach_tray(
             log.info("Switched profile to %s", name)
 
     add_item("Next profile", next_profile)
+
+    def do_uninstall() -> None:
+        # GTK3 MenuItem → use a simple confirm via print/log; GUI dialog needs GTK4 window.
+        try:
+            from gi.repository import Adw
+
+            dialog = Adw.AlertDialog.new(
+                "Uninstall Tartarus V2?",
+                "This removes the tartarus-v2 package (requires admin). "
+                "Profiles under ~/.cache/tartarus-v2 are kept.",
+            )
+            dialog.add_response("cancel", "Cancel")
+            dialog.add_response("uninstall", "Uninstall")
+            dialog.set_response_appearance("uninstall", Adw.ResponseAppearance.DESTRUCTIVE)
+            dialog.set_default_response("cancel")
+            dialog.set_close_response("cancel")
+
+            def on_response(_d: Any, response: str) -> None:
+                if response != "uninstall":
+                    return
+                result = ctrl.uninstall()
+                if getattr(window, "_toast_overlay", None):
+                    window._toast_overlay.add_toast(Adw.Toast.new(result))
+                if "removed" in result.lower():
+                    on_quit()
+
+            dialog.connect("response", on_response)
+            dialog.present(window)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Uninstall dialog failed (%s); running directly", exc)
+            result = ctrl.uninstall()
+            log.info("%s", result)
+
+    add_item("Uninstall…", do_uninstall)
     add_item("Quit", on_quit)
     menu.show_all()
     indicator.set_menu(menu)

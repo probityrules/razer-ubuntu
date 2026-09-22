@@ -35,8 +35,15 @@ mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 # Prefer venv wrapper when present
 DESKTOP_SRC="$ROOT/packaging/tartarus-v2.desktop"
 DESKTOP_DST="${XDG_DATA_HOME:-$HOME/.local/share}/applications/tartarus-v2.desktop"
-sed "s|^Exec=.*|Exec=$ROOT/.venv/bin/tartarus-v2 gui|" "$DESKTOP_SRC" > "$DESKTOP_DST"
+sed "s|^Exec=tartarus-v2 gui|Exec=$ROOT/.venv/bin/tartarus-v2 gui|; s|^Exec=tartarus-v2 uninstall|Exec=$ROOT/.venv/bin/tartarus-v2 uninstall|" \
+  "$DESKTOP_SRC" > "$DESKTOP_DST"
 update-desktop-database "${XDG_DATA_HOME:-$HOME/.local/share}/applications" 2>/dev/null || true
+
+echo "==> Enabling login autostart for daemon"
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
+sed "s|^Exec=.*|Exec=$ROOT/.venv/bin/tartarus-v2 daemon --background|" \
+  "$ROOT/packaging/tartarus-v2-daemon.desktop" \
+  > "${XDG_CONFIG_HOME:-$HOME/.config}/autostart/tartarus-v2-daemon.desktop"
 
 echo "==> Ensuring user groups (input, plugdev)"
 USER_NAME="${SUDO_USER:-$USER}"

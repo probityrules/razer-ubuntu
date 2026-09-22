@@ -128,6 +128,92 @@ def duplicate_profile(source: str, dest: str) -> Path:
     return prof.save_profile(data, dest)
 
 
+def create_profile(name: str, *, clone_active: bool = True) -> Path:
+    """Create a new profile from the active one (or the built-in default)."""
+    name = name.strip()
+    if not name:
+        raise ValueError("Profile name required")
+    if any(p["name"] == name for p in list_profiles()):
+        raise ValueError(f"Profile already exists: {name}")
+    if clone_active:
+        data = dict(prof.load_profile(prof.get_active_profile_name()))
+    else:
+        data = prof.default_profile()
+    data["name"] = name
+    return prof.save_profile(data, name)
+
+
+def is_autostart_enabled() -> bool:
+    from tartarus_v2.autostart import is_autostart_enabled as _enabled
+
+    return _enabled()
+
+
+def set_autostart_enabled(enabled: bool) -> Path:
+    from tartarus_v2.autostart import set_autostart_enabled as _set
+
+    return _set(enabled)
+
+
+def start_daemon_background(profile: str | None = None, debug: bool = False) -> Any:
+    from tartarus_v2 import daemon_control
+
+    return daemon_control.start(profile=profile, debug=debug)
+
+
+def uninstall_package(*, noninteractive: bool = False) -> str:
+    """Remove the tartarus-v2 .deb via pkexec/apt when available."""
+    import shutil
+    import subprocess
+
+    from tartarus_v2 import daemon_control
+
+    try:
+        daemon_control.stop()
+    except Exception:  # noqa: BLE001
+        pass
+
+    if not shutil.which("apt-get"):
+        return (
+            "apt-get not found. Uninstall manually, e.g. remove the package "
+            "or delete the install directory."
+        )
+
+    cmd = ["apt-get", "remove", "-y", "tartarus-v2"]
+    if shutil.which("pkexec"):
+        cmd = ["pkexec", *cmd]
+    elif not noninteractive:
+        return "pkexec not found; run: sudo apt-get remove -y tartarus-v2"
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"Uninstall failed: {exc}"
+
+    if proc.returncode == 0:
+        return "tartarus-v2 removed"
+    err = (proc.stderr or proc.stdout or "").strip()
+    return f"Uninstall failed (code {proc.returncode}): {err[:500]}"
+
+
+def permission_status() -> Any:
+    from tartarus_v2.permissions import permission_status as _status
+
+    return _status()
+
+
+def fix_permissions() -> str:
+    from tartarus_v2.permissions import fix_permissions as _fix
+
+    return _fix()
+
+
 def run_diagnose(
     *,
     out: str | None = None,

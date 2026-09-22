@@ -56,6 +56,9 @@ def test_profiles_roundtrip(profile_home: Path) -> None:
     assert dup.exists()
     names = [i["name"] for i in ctrl.refresh_profiles()]
     assert "arena" in names
+    created = ctrl.create_profile("fresh")
+    assert created.exists()
+    assert "fresh" in [i["name"] for i in ctrl.refresh_profiles()]
 
 
 def test_bindings_hypershift(profile_home: Path) -> None:
@@ -88,12 +91,29 @@ def test_daemon_controller(mock_status: MagicMock, mock_stop: MagicMock, mock_st
     assert not ctrl.daemon_status().running
 
 
+def test_autostart_toggle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    from tartarus_v2 import autostart
+
+    assert not autostart.is_autostart_enabled()
+    path = autostart.set_autostart_enabled(True)
+    assert path.exists()
+    assert autostart.is_autostart_enabled()
+    autostart.set_autostart_enabled(False)
+    assert not autostart.is_autostart_enabled()
+    assert DaemonController().is_autostart_enabled() is False
+
+
 def test_diagnose_report_banners() -> None:
     report = build_report(skip_probe=True)
     assert COPY_FROM in report
     assert COPY_TO in report
     assert "## 1. Header" in report
     assert "## 7. Live probe" in report
+    assert "## 10. Issues / remediation" in report
 
 
 def test_diagnose_controller(tmp_path: Path) -> None:

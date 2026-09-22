@@ -224,16 +224,19 @@ def _permissions() -> str:
         groups = ["(grp module unavailable on this OS)"]
     except Exception as exc:  # noqa: BLE001
         groups = [f"(error listing groups: {exc})"]
+    in_input = "input" in groups
+    in_plugdev = "plugdev" in groups
     lines = [
         f"user={user}",
         f"groups={sorted(set(groups))}",
-        f"in_input={'input' in groups}",
-        f"in_plugdev={'plugdev' in groups}",
+        f"in_input={in_input}",
+        f"in_plugdev={in_plugdev}",
         "udev rules:",
     ]
     for pattern in (
         "/etc/udev/rules.d/*tartarus*",
         "/etc/udev/rules.d/*razer*",
+        "/lib/udev/rules.d/*tartarus*",
         "/lib/udev/rules.d/*razer*",
     ):
         hits = glob.glob(pattern)
@@ -242,7 +245,65 @@ def _permissions() -> str:
                 lines.append(f"  {h}")
         else:
             lines.append(f"  (no matches for {pattern})")
+    if not in_input:
+        lines.append(
+            "NOTE: not in group 'input' — remapper cannot open /dev/input/event* "
+            "(Permission denied). Fix: sudo usermod -aG input,plugdev \"$USER\" "
+            "then log out/in."
+        )
+    if not in_plugdev:
+        lines.append(
+            "NOTE: not in group 'plugdev' — hidraw/USB access may fail for chroma."
+        )
     return "\n".join(lines)
+
+
+def _issues() -> str:
+    """Summarize actionable problems from a quick re-check (for operators)."""
+    import getpass
+
+    findings: list[str] = []
+    user = getpass.getuser()
+    groups: set[str] = set()
+    try:
+        import grp
+
+        groups = {g.gr_name for g in grp.getgrall() if user in g.gr_mem}
+        groups.add(grp.getgrgid(os.getgid()).gr_name)
+    except Exception:  # noqa: BLE001
+        pass
+
+    if "input" not in groups:
+        findings.append(
+            "User not in 'input' group → remapping fails with Permission denied on "
+            "/dev/input/event*. Run: sudo usermod -aG input,plugdev \"$USER\" && log out/in."
+        )
+    if "plugdev" not in groups:
+        findings.append(
+            "User not in 'plugdev' group → hidraw/USB chroma may fail without uaccess."
+        )
+
+    tartarus_rules = glob.glob("/lib/udev/rules.d/*tartarus*") + glob.glob(
+        "/etc/udev/rules.d/*tartarus*"
+    )
+    if not tartarus_rules:
+        findings.append(
+            "No tartarus udev rules found under /lib or /etc udev rules.d — "
+            "reinstall the .deb or copy scripts/99-tartarus-v2.rules and udevadm reload."
+        )
+
+    log = log_path()
+    if log.exists():
+        text = _read_text(log, limit=120)
+        if "Permission denied" in text and "/dev/input" in text:
+            findings.append(
+                "Daemon log shows Permission denied opening Tartarus input nodes "
+                "(same root cause as missing 'input' group / udev MODE)."
+            )
+
+    if not findings:
+        return "No obvious configuration issues detected."
+    return "\n".join(f"- {f}" for f in findings)
 
 
 def _live_probe(debug: bool = True) -> str:
@@ -364,6 +425,7 @@ def build_report(listen_seconds: float = 0.0, skip_probe: bool = False) -> str:
     else:
         parts.append(_section("8. Key listen", "(skipped; pass --listen N)"))
     parts.append(_section("9. Log tail", _log_tail()))
+    parts.append(_section("10. Issues / remediation", _issues()))
     parts.append(f"\n{COPY_TO}\n")
     return "\n".join(parts)
 

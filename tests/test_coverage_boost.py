@@ -10,7 +10,7 @@ import pytest
 from tartarus_v2.hid import protocol
 from tartarus_v2.logging_util import annotate_report, hex_dump, log_path, setup_logging
 from tartarus_v2 import actions, daemon_control, profiles
-from tartarus_v2.gui.controllers import LightingController, AppController
+from tartarus_v2.gui.controllers import LightingController, AppController, DaemonController
 
 
 def test_protocol_builders_and_crc() -> None:
@@ -154,6 +154,172 @@ def test_app_controller(mock_launch: MagicMock) -> None:
     with patch("tartarus_v2.gui.controllers.actions.launch_gui", return_value=0) as m:
         assert AppController().launch() == 0
         m.assert_called_once()
+
+
+def test_create_profile_and_uninstall(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    path = actions.create_profile("newbie")
+    assert path.exists()
+    with pytest.raises(ValueError):
+        actions.create_profile("newbie")
+    with pytest.raises(ValueError):
+        actions.create_profile("  ")
+
+    with patch("tartarus_v2.daemon_control.stop"):
+        with patch("shutil.which", return_value=None):
+            msg = actions.uninstall_package()
+            assert "apt-get not found" in msg
+
+    with patch("tartarus_v2.daemon_control.stop"):
+        with patch(
+            "shutil.which",
+            side_effect=lambda c: "/usr/bin/apt-get" if c == "apt-get" else None,
+        ):
+            msg = actions.uninstall_package()
+            assert "pkexec" in msg or "sudo" in msg
+
+    fake = MagicMock(returncode=0, stdout="", stderr="")
+    with patch("tartarus_v2.daemon_control.stop"):
+        with patch("shutil.which", return_value="/usr/bin/x"):
+            with patch("subprocess.run", return_value=fake) as run:
+                msg = actions.uninstall_package()
+                assert "removed" in msg
+                assert run.called
+
+
+def test_start_daemon_background() -> None:
+    with patch(
+        "tartarus_v2.daemon_control.start",
+        return_value=daemon_control.DaemonStatus(running=True, pid=3, detail="started"),
+    ) as start:
+        st = actions.start_daemon_background(profile="default", debug=True)
+        assert st.running
+        start.assert_called_once_with(profile="default", debug=True)
+
+
+def test_short_label_keys() -> None:
+    from tartarus_v2.input.keys import short_label
+
+    assert short_label("stick_up") == "↑"
+    assert short_label("key_01") == "01"
+    assert short_label("mode") == "mode"
+    assert short_label("custom") == "custom"
+
+
+def test_permissions_status_and_fix(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tartarus_v2 import permissions
+    from tartarus_v2.permissions import PermissionStatus
+
+    monkeypatch.setattr(permissions, "current_username", lambda: "alice")
+    monkeypatch.setattr(permissions, "user_group_names", lambda _u=None: {"users", "plugdev"})
+    st = permissions.permission_status()
+    assert not st.ok
+    assert "input" in st.missing
+
+    monkeypatch.setattr(permissions, "user_group_names", lambda _u=None: {"input", "plugdev"})
+    assert permissions.permission_status().ok
+
+    monkeypatch.setattr(
+        permissions,
+        "permission_status",
+        lambda username=None: PermissionStatus(
+            user="alice",
+            groups=("input", "plugdev"),
+            missing=(),
+            ok=True,
+            detail="ok",
+        ),
+    )
+    assert "already" in permissions.fix_permissions().lower()
+
+    monkeypatch.setattr(
+        permissions,
+        "permission_status",
+        lambda username=None: PermissionStatus(
+            user="alice",
+            groups=("plugdev",),
+            missing=("input",),
+            ok=False,
+            detail="missing",
+        ),
+    )
+    monkeypatch.setattr(
+        permissions.shutil, "which", lambda c: "/usr/bin/pkexec" if c == "pkexec" else None
+    )
+    fake = MagicMock(returncode=0, stdout="", stderr="")
+    with patch("tartarus_v2.permissions.subprocess.run", return_value=fake) as run:
+        msg = permissions.fix_permissions()
+        assert "Log out" in msg or "log out" in msg.lower()
+        assert run.called
+
+    with patch(
+        "tartarus_v2.gui.controllers.actions.permission_status",
+        return_value=PermissionStatus(
+            user="alice", groups=("input", "plugdev"), missing=(), ok=True, detail="ok"
+        ),
+    ):
+        assert DaemonController().permission_status().ok
+    with patch("tartarus_v2.gui.controllers.actions.fix_permissions", return_value="fixed") as m:
+        assert DaemonController().fix_permissions() == "fixed"
+        m.assert_called_once()
+
+
+def test_app_controller_uninstall() -> None:
+    with patch("tartarus_v2.gui.controllers.actions.uninstall_package", return_value="ok") as m:
+        assert AppController().uninstall() == "ok"
+        m.assert_called_once()
+
+
+def test_actions_permission_wrappers() -> None:
+    from tartarus_v2.permissions import PermissionStatus
+
+    fake = PermissionStatus(
+        user="bob", groups=("input", "plugdev"), missing=(), ok=True, detail="ok"
+    )
+    with patch("tartarus_v2.permissions.permission_status", return_value=fake):
+        assert actions.permission_status().ok
+    with patch("tartarus_v2.permissions.fix_permissions", return_value="done"):
+        assert actions.fix_permissions() == "done"
+
+
+def test_permissions_root_and_missing_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tartarus_v2 import permissions
+    from tartarus_v2.permissions import PermissionStatus
+
+    monkeypatch.setattr(
+        permissions,
+        "permission_status",
+        lambda username=None: PermissionStatus(
+            user="root", groups=(), missing=("input", "plugdev"), ok=False, detail="x"
+        ),
+    )
+    assert "Cannot fix" in permissions.fix_permissions()
+
+    monkeypatch.setattr(
+        permissions,
+        "permission_status",
+        lambda username=None: PermissionStatus(
+            user="carol",
+            groups=(),
+            missing=("input",),
+            ok=False,
+            detail="missing",
+        ),
+    )
+    monkeypatch.setattr(permissions.shutil, "which", lambda _c: None)
+    msg = permissions.fix_permissions()
+    assert "pkexec/sudo not found" in msg
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **_kwargs):  # noqa: ANN001
+        calls.append(list(cmd))
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("tartarus_v2.permissions.subprocess.run", side_effect=fake_run):
+        msg = permissions._apply_as_root("carol")
+        assert "Log out" in msg or "log out" in msg.lower()
+        assert any(c[0] == "usermod" for c in calls)
 
 
 def test_features_collect_empty() -> None:

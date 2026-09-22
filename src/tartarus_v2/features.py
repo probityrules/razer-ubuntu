@@ -26,15 +26,22 @@ FEATURE_MAP: tuple[Feature, ...] = (
     Feature("profile.path", "profiles_path", "profiles", "open_profiles_dir"),
     Feature("info", "device_info", "device", "refresh_device"),
     Feature("gui", "launch_gui", "app", "launch"),
+    Feature("uninstall", "uninstall_package", "app", "uninstall"),
+    Feature("fix-permissions", "fix_permissions", "daemon", "fix_permissions"),
 )
 
 # Extra GUI-only handlers that must exist for full CLI-equivalent coverage
 GUI_EXTRA_HANDLERS: tuple[tuple[str, str], ...] = (
     ("daemon", "stop_daemon"),
     ("daemon", "daemon_status"),
+    ("daemon", "is_autostart_enabled"),
+    ("daemon", "set_autostart_enabled"),
+    ("daemon", "permission_status"),
     ("bindings", "load_bindings"),
     ("bindings", "save_bindings"),
     ("bindings", "set_hypershift_key"),
+    ("profiles", "create_profile"),
+    ("profiles", "duplicate_profile"),
     ("diagnose", "copy_report"),
     ("diagnose", "save_report"),
     ("lighting", "list_effects"),

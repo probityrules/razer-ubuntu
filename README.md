@@ -13,6 +13,7 @@ No OpenRazer runtime dependency. Supports RGB lighting, key remapping, **Hypersh
 | Profiles | `profile list/show/use/path` | Profiles page |
 | Remap + Hypershift + macros | profile JSON + daemon | Bindings page |
 | Daemon | `tartarus-v2 daemon` | Daemon page + tray |
+| Permissions | `fix-permissions` | Device / Daemon → Fix permissions |
 | Diagnostics | `tartarus-v2 diagnose` | Diagnose page (copy/save) |
 | GUI | `tartarus-v2 gui` | App grid / tray |
 
@@ -21,7 +22,7 @@ No OpenRazer runtime dependency. Supports RGB lighting, key remapping, **Hypersh
 - Ubuntu 26.x (or 24.04+) with GNOME
 - Python 3.10+ (system `python3-gi`, GTK4, Libadwaita, Ayatana AppIndicator)
 - Razer Tartarus V2 over USB
-- User in `input` and `plugdev` groups
+- User in `input` and `plugdev` groups (installer / `fix-permissions` adds these)
 
 ## Quick install (Linux)
 
@@ -30,12 +31,14 @@ No OpenRazer runtime dependency. Supports RGB lighting, key remapping, **Hypersh
 On each version bump to `main`, CI builds a `.deb` and attaches it to a GitHub Release (`vX.Y.Z`):
 
 ```bash
-# Example for v0.2.1 — use the latest release tag/assets from GitHub:
-curl -LO "https://github.com/probityrules/razer-ubuntu/releases/latest/download/tartarus-v2_0.2.1_all.deb"
-sudo apt install ./tartarus-v2_0.2.1_all.deb
-sudo usermod -aG input,plugdev "$USER"
+# Example for v0.3.0 — use the latest release tag/assets from GitHub:
+curl -LO "https://github.com/probityrules/razer-ubuntu/releases/latest/download/tartarus-v2_0.3.0_all.deb"
+sudo apt install ./tartarus-v2_0.3.0_all.deb
+# postinst adds you to input+plugdev when it can detect your user
 # log out/in, then:
 tartarus-v2 gui
+# If remapping still fails (Permission denied on /dev/input):
+tartarus-v2 fix-permissions   # or Device/Daemon → Fix permissions in the GUI
 ```
 
 (Exact `.deb` filename matches the release version.)
@@ -61,10 +64,14 @@ Native **Libadwaita** app (`Adw.Application` + sidebar navigation):
 
 1. **Device** — firmware / serial / brightness (`info`)
 2. **Lighting** — effects, colours, brightness (`set-effect` / `set-brightness`)
-3. **Profiles** — list, activate, duplicate, open folder, JSON preview
-4. **Bindings** — Standard / Hypershift layers, hypershift key, macros
-5. **Daemon** — start/stop remap subprocess with debug toggle
+3. **Profiles** — activate / add profile; **Advanced…** for JSON, duplicate, folder
+4. **Bindings** — clickable keymap with **Normal / Hypershift** toggle, profile switcher, link to Profiles
+5. **Daemon** — start/stop, **Start at login** autostart, debug toggle, **Fix permissions**
 6. **Diagnose** — run dump, copy clipboard, save file (COPY banners)
+
+Device and Daemon pages warn when you are missing `input`/`plugdev` and offer **Fix permissions** (polkit/`pkexec`). The `.deb` postinst also tries to add the installing user to those groups automatically.
+
+Tray / app-grid right-click: **Uninstall** (`.deb` via `pkexec apt-get remove`). Login autostart runs `tartarus-v2 daemon --background` (packaged under `/etc/xdg/autostart/`, toggleable from Daemon).
 
 ## CLI
 
@@ -75,6 +82,7 @@ tartarus-v2 set-effect static --rgb FF0000
 tartarus-v2 set-brightness 200
 tartarus-v2 info
 tartarus-v2 daemon --debug
+tartarus-v2 fix-permissions
 tartarus-v2 profile list
 tartarus-v2 gui
 ```

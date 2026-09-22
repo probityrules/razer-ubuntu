@@ -55,11 +55,22 @@ def create_main_window(app: Any, debug: bool = False) -> Any:
     list_box = Gtk.ListBox()
     list_box.set_selection_mode(Gtk.SelectionMode.SINGLE)
     list_box.add_css_class("navigation-sidebar")
+    row_by_name: dict[str, Any] = {}
     for name, title, icon, _ in pages:
         row = Adw.ActionRow(title=title)
         row.set_icon_name(icon)
         row._stack_name = name  # noqa: SLF001
         list_box.append(row)
+        row_by_name[name] = row
+
+    content_page = Adw.NavigationPage(title="Device")
+
+    def _set_content_title_from_stack() -> None:
+        child = stack.get_visible_child()
+        if child is None:
+            return
+        page = stack.get_page(child)
+        content_page.set_title(page.get_title() if page is not None else "Tartarus V2")
 
     def on_row_selected(_lb: Any, row: Any) -> None:
         if row is None:
@@ -67,16 +78,23 @@ def create_main_window(app: Any, debug: bool = False) -> Any:
         name = getattr(row, "_stack_name", None)
         if name:
             stack.set_visible_child_name(name)
-            content_page.set_title(stack.get_visible_child().get_title())
+            _set_content_title_from_stack()
 
     list_box.connect("row-selected", on_row_selected)
     list_box.select_row(list_box.get_row_at_index(0))
+
+    def navigate_to(name: str) -> None:
+        row = row_by_name.get(name)
+        if row is not None:
+            list_box.select_row(row)
+            return
+        stack.set_visible_child_name(name)
+        _set_content_title_from_stack()
 
     side_scroll = Gtk.ScrolledWindow(child=list_box)
     sidebar_toolbar.set_content(side_scroll)
     sidebar_page.set_child(sidebar_toolbar)
 
-    content_page = Adw.NavigationPage(title="Device")
     content_toolbar = Adw.ToolbarView()
     content_header = Adw.HeaderBar()
     content_toolbar.add_top_bar(content_header)
@@ -89,6 +107,7 @@ def create_main_window(app: Any, debug: bool = False) -> Any:
     # App menu
     menu = Gio.Menu()
     menu.append("About Tartarus V2", "app.about")
+    menu.append("Uninstall…", "app.uninstall")
     menu.append("Quit", "app.quit")
     menu_btn = Gtk.MenuButton(icon_name="open-menu-symbolic")
     menu_btn.set_menu_model(menu)
@@ -97,6 +116,7 @@ def create_main_window(app: Any, debug: bool = False) -> Any:
     toast_overlay.set_child(split)
     window.set_content(toast_overlay)
     window._stack = stack  # noqa: SLF001
+    window.navigate_to = navigate_to  # noqa: SLF001
     return window
 
 

@@ -62,3 +62,52 @@ ALL_LOGICAL_KEYS = sorted(LOGICAL_TO_CODE.keys()) + [
     "scroll_down",
     "scroll_click",
 ]
+
+# Approximate Tartarus V2 top-down layout (logical names). None = empty spacer.
+# Main pad is 5×3; thumb module sits below with stick + mode/thumb + scroll wheel.
+KEYMAP_LAYOUT: list[list[str | None]] = [
+    ["key_01", "key_02", "key_03", "key_04", "key_05", None, None],
+    ["key_06", "key_07", "key_08", "key_09", "key_10", None, "scroll_up"],
+    ["key_11", "key_12", "key_13", "key_14", "key_15", None, "scroll_click"],
+    [None, None, "stick_up", None, None, None, "scroll_down"],
+    [None, "stick_left", None, "stick_right", None, None, None],
+    ["mode", None, "stick_down", None, "thumb", None, None],
+]
+
+KEYMAP_ASCII = """
+Tartarus V2 logical key map (for bindings / profile JSON)
+=========================================================
+
+  [key_01] [key_02] [key_03] [key_04] [key_05]
+  [key_06] [key_07] [key_08] [key_09] [key_10]              [scroll_up]
+  [key_11] [key_12] [key_13] [key_14] [key_15]           [scroll_click]
+                                                           [scroll_down]
+                    [stick_up]
+          [stick_left]    [stick_right]
+  [mode]          [stick_down]                 [thumb]
+
+Notes:
+  - mode is often used as Hypershift (hold for secondary layer)
+  - thumb is the hyperesponse thumb key (default Space)
+  - stick_* is the 8-way thumb pad (cardinals mapped; diagonals not separate)
+""".strip()
+
+
+def short_label(logical: str) -> str:
+    """Compact label for keymap buttons."""
+    aliases = {
+        "stick_up": "↑",
+        "stick_down": "↓",
+        "stick_left": "←",
+        "stick_right": "→",
+        "scroll_up": "Scr↑",
+        "scroll_down": "Scr↓",
+        "scroll_click": "Scr•",
+        "mode": "mode",
+        "thumb": "thumb",
+    }
+    if logical in aliases:
+        return aliases[logical]
+    if logical.startswith("key_"):
+        return logical.replace("key_", "")
+    return logical

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Tartarus V2 Daemon
+Comment=Start Tartarus V2 lighting and remapper on login
+Exec=tartarus-v2 daemon --background
+Icon=input-keyboard
+Terminal=false
+X-GNOME-Autostart-enabled=true
+NoDisplay=false

@@ -11,6 +11,7 @@ omit =
     */tartarus_v2/gui/app.py
     */tartarus_v2/gui/window.py
     */tartarus_v2/gui/pages.py
+    */tartarus_v2/gui/keymap.py
     */tartarus_v2/gui/tray.py
     */tartarus_v2/gui/gi_check.py
     */tartarus_v2/gui/workers.py
