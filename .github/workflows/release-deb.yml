@@ -1,0 +1,109 @@
+# Build and publish a .deb GitHub Release when version changes on main.
+name: Release deb
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release-deb:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect version bump
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          NEW="$(python3 -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')"
+          echo "version=${NEW}" >> "$GITHUB_OUTPUT"
+
+          if ! git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            echo "Version ${NEW} on initial commit — will release"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          OLD="$(git show HEAD^:pyproject.toml | python3 -c 'import sys, tomllib; print(tomllib.loads(sys.stdin.read())["project"]["version"])')"
+          echo "previous_version=${OLD}" >> "$GITHUB_OUTPUT"
+
+          if [ "${NEW}" = "${OLD}" ]; then
+            echo "Version unchanged (${NEW}) — skipping release"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version bumped ${OLD} -> ${NEW} — releasing"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip if release already exists
+        id: existing
+        if: steps.ver.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          TAG="v${{ steps.ver.outputs.version }}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists — skipping"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install build dependencies
+        if: steps.ver.outputs.should_release == 'true' && steps.existing.outputs.should_release == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev python3-pip python3-setuptools python3-wheel
+
+      - name: Build .deb
+        if: steps.ver.outputs.should_release == 'true' && steps.existing.outputs.should_release == 'true'
+        run: |
+          chmod +x packaging/build-deb.sh packaging/postinst.sh packaging/postrm.sh
+          ./packaging/build-deb.sh
+
+      - name: Create GitHub Release
+        if: steps.ver.outputs.should_release == 'true' && steps.existing.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          TAG="v${VERSION}"
+          DEB="dist/tartarus-v2_${VERSION}_all.deb"
+          test -f "$DEB"
+
+          NOTES="$(mktemp)"
+          cat > "$NOTES" <<EOF
+          ## tartarus-v2 ${VERSION}
+
+          ### Install (Ubuntu 24.04 / 26.x)
+
+          \`\`\`bash
+          # From the assets below, or:
+          curl -LO "https://github.com/${{ github.repository }}/releases/download/${TAG}/tartarus-v2_${VERSION}_all.deb"
+          sudo apt install "./tartarus-v2_${VERSION}_all.deb"
+          sudo usermod -aG input,plugdev "\$USER"
+          # log out and back in, then:
+          tartarus-v2 gui
+          \`\`\`
+
+          Built automatically from \`main\` when the version in \`pyproject.toml\` changed.
+          EOF
+
+          # Strip leading indentation from heredoc for cleaner release notes
+          sed -i 's/^          //' "$NOTES"
+
+          gh release create "$TAG" "$DEB" \
+            --repo "${{ github.repository }}" \
+            --title "tartarus-v2 ${VERSION}" \
+            --notes-file "$NOTES" \
+            --latest

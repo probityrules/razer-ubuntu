@@ -25,6 +25,23 @@ No OpenRazer runtime dependency. Supports RGB lighting, key remapping, **Hypersh
 
 ## Quick install (Linux)
 
+### From GitHub Releases (recommended)
+
+On each version bump to `main`, CI builds a `.deb` and attaches it to a GitHub Release (`vX.Y.Z`):
+
+```bash
+# Example for v0.2.1 — use the latest release tag/assets from GitHub:
+curl -LO "https://github.com/probityrules/razer-ubuntu/releases/latest/download/tartarus-v2_0.2.1_all.deb"
+sudo apt install ./tartarus-v2_0.2.1_all.deb
+sudo usermod -aG input,plugdev "$USER"
+# log out/in, then:
+tartarus-v2 gui
+```
+
+(Exact `.deb` filename matches the release version.)
+
+### From source
+
 ```bash
 git clone <this-repo> && cd razer-ubuntu
 chmod +x scripts/install-ubuntu.sh
@@ -86,6 +103,18 @@ If OpenRazer’s `razerkbd` owns the device, chroma may fail. Diagnose section 5
 1. GUI **Diagnose** → Run → Copy, or `tartarus-v2 diagnose --out ~/tartarus-diagnose.log`
 2. Paste between `=== COPY FROM HERE ===` and `=== COPY TO HERE ===`
 3. Iterate from the Windows-side chat
+
+## Packaging (.deb)
+
+On Ubuntu/Debian (or CI):
+
+```bash
+chmod +x packaging/build-deb.sh
+./packaging/build-deb.sh
+# → dist/tartarus-v2_<version>_all.deb
+```
+
+Pushing a **version bump** on `main` (see `bcp`) triggers `.github/workflows/release-deb.yml`, which builds the `.deb` and publishes a GitHub Release.
 
 ## Development (Windows)
 
