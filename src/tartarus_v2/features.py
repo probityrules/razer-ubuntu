@@ -41,10 +41,13 @@ GUI_EXTRA_HANDLERS: tuple[tuple[str, str], ...] = (
     ("bindings", "load_bindings"),
     ("bindings", "save_bindings"),
     ("bindings", "set_hypershift_key"),
+    ("bindings", "apply_bindings"),
     ("profiles", "create_profile"),
     ("profiles", "duplicate_profile"),
     ("diagnose", "copy_report"),
     ("diagnose", "save_report"),
+    ("diagnose", "start_live_listen"),
+    ("diagnose", "stop_live_listen"),
     ("lighting", "list_effects"),
 )
 

@@ -65,17 +65,18 @@ def test_bindings_hypershift(profile_home: Path) -> None:
     ctrl = BindingsController()
     data = ctrl.load_bindings("default")
     assert data["hypershift_key"]
+    updated = ctrl.set_hypershift_key("default", "thumb")
+    assert updated["hypershift_key"] == "thumb"
+    saved = ctrl.save_bindings(
+        "default",
+        "hypershift",
+        {"key_01": "F1", "key_02": {"type": "macro", "steps": [{"tap": "a"}]}},
+        hypershift_key="thumb",
+    )
+    assert saved["hypershift"]["bindings"]["key_01"] == "F1"
     with patch("tartarus_v2.actions.nudge_daemon_reload", return_value="reload signaled") as nudge:
-        updated = ctrl.set_hypershift_key("default", "thumb")
-        assert updated["hypershift_key"] == "thumb"
-        saved = ctrl.save_bindings(
-            "default",
-            "hypershift",
-            {"key_01": "F1", "key_02": {"type": "macro", "steps": [{"tap": "a"}]}},
-            hypershift_key="thumb",
-        )
-        assert saved["hypershift"]["bindings"]["key_01"] == "F1"
-        assert nudge.call_count >= 2
+        assert ctrl.apply_bindings() == "reload signaled"
+        nudge.assert_called_once()
 
 
 @patch("tartarus_v2.gui.controllers.daemon_control.start")
@@ -127,6 +128,32 @@ def test_diagnose_controller(tmp_path: Path) -> None:
     assert ctrl.copy_report() == text
     out = ctrl.save_report(tmp_path / "out.log")
     assert out.read_text(encoding="utf-8") == text
+
+
+def test_diagnose_live_listen_controller() -> None:
+    ctrl = DiagnoseController()
+    assert not ctrl.live_listen_running()
+    updates: list[dict] = []
+
+    class FakeMon:
+        running = True
+
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            self.running = False
+
+        def reload_profile(self) -> None:
+            updates.append({"reload": True})
+
+    with patch("tartarus_v2.key_listen.LiveKeyMonitor", return_value=FakeMon()):
+        ctrl.start_live_listen(lambda p: updates.append(p))
+        assert ctrl.live_listen_running()
+        ctrl.reload_live_listen_profile()
+        ctrl.stop_live_listen()
+    assert not ctrl.live_listen_running()
+    assert updates and updates[0].get("reload")
 
 
 def test_actions_run_diagnose(tmp_path: Path) -> None:

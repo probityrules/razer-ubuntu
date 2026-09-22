@@ -108,8 +108,6 @@ def set_hypershift_key(profile_name: str, key: str) -> dict[str, Any]:
     data = prof.load_profile(profile_name)
     data["hypershift_key"] = key
     prof.save_profile(data, profile_name)
-    if profile_name == prof.get_active_profile_name():
-        nudge_daemon_reload()
     return data
 
 
@@ -126,8 +124,6 @@ def save_bindings(
     if hypershift_key is not None:
         data["hypershift_key"] = hypershift_key
     prof.save_profile(data, profile_name)
-    if profile_name == prof.get_active_profile_name():
-        nudge_daemon_reload()
     return data
 
 
@@ -137,6 +133,11 @@ def nudge_daemon_reload() -> str:
 
     st = daemon_control.reload()
     return st.detail
+
+
+def apply_active_profile() -> str:
+    """Reload the running daemon so pending binding/profile edits take effect."""
+    return nudge_daemon_reload()
 
 
 def duplicate_profile(source: str, dest: str) -> Path:

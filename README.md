@@ -31,9 +31,9 @@ No OpenRazer runtime dependency. Supports RGB lighting, key remapping, **Hypersh
 On each version bump to `main`, CI builds a `.deb` and attaches it to a GitHub Release (`vX.Y.Z`):
 
 ```bash
-# Example for v0.3.1 — use the latest release tag/assets from GitHub:
-curl -LO "https://github.com/probityrules/razer-ubuntu/releases/latest/download/tartarus-v2_0.3.1_all.deb"
-sudo apt install ./tartarus-v2_0.3.1_all.deb
+# Example for v0.4.0 — use the latest release tag/assets from GitHub:
+curl -LO "https://github.com/probityrules/razer-ubuntu/releases/latest/download/tartarus-v2_0.4.0_all.deb"
+sudo apt install ./tartarus-v2_0.4.0_all.deb
 # postinst adds you to input+plugdev when it can detect your user
 # log out/in, then:
 tartarus-v2 gui
@@ -67,7 +67,7 @@ Native **Libadwaita** app (`Adw.Application` + sidebar navigation):
 3. **Profiles** — activate / add profile; **Advanced…** for JSON, duplicate, folder
 4. **Bindings** — clickable keymap with **Normal / Hypershift** toggle, profile switcher, link to Profiles
 5. **Daemon** — start/stop, **Start at login** autostart, debug toggle, **Fix permissions**
-6. **Diagnose** — run dump, copy clipboard, save file (COPY banners)
+6. **Diagnose** — live EV_KEY listen (pauses/restarts daemon as needed), dump/copy/save
 
 Device and Daemon pages warn when you are missing `input`/`plugdev` and offer **Fix permissions** (polkit/`pkexec`). The `.deb` postinst also tries to add the installing user to those groups automatically.
 

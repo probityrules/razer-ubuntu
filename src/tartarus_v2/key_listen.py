@@ -1,0 +1,289 @@
+"""Live Tartarus key listen helpers (EV_KEY + active profile mapping)."""
+
+from __future__ import annotations
+
+import logging
+import select
+import threading
+import time
+from collections import deque
+from dataclasses import dataclass
+from typing import Any, Callable
+
+from tartarus_v2.input.keys import CODE_TO_LOGICAL, LOGICAL_TO_CODE
+from tartarus_v2.profiles import get_active_profile_name, load_profile
+
+log = logging.getLogger("tartarus_v2.key_listen")
+
+UpdateFn = Callable[[dict[str, Any]], None]
+
+
+@dataclass(frozen=True)
+class KeyLine:
+    code: int
+    ev_name: str
+    logical: str
+    layer: str
+    mapping: str
+    pressed: bool
+
+
+def ev_key_name(code: int, ecodes: Any | None = None) -> str:
+    """Best-effort Linux EV_KEY symbolic name for a keycode."""
+    if ecodes is None:
+        try:
+            from evdev import ecodes as _ecodes
+
+            ecodes = _ecodes
+        except ImportError:
+            return f"code={code}"
+    names = ecodes.KEY.get(code) if hasattr(ecodes, "KEY") else None
+    if isinstance(names, (list, tuple)) and names:
+        return str(names[0])
+    if isinstance(names, str):
+        return names
+    return f"KEY_{code}"
+
+
+def format_binding(binding: Any) -> str:
+    if binding is None:
+        return "(no mapping)"
+    if isinstance(binding, str):
+        return binding
+    if isinstance(binding, dict):
+        kind = binding.get("type", "action")
+        if kind == "macro":
+            steps = binding.get("steps") or []
+            taps = []
+            for step in steps:
+                if isinstance(step, dict) and "tap" in step:
+                    taps.append(str(step["tap"]))
+            return "macro(" + ",".join(taps) + ")" if taps else "macro"
+        if kind == "key":
+            return str(binding.get("key") or binding.get("keys") or "key")
+        return str(kind)
+    return str(binding)
+
+
+def binding_for_logical(profile: dict[str, Any], logical: str, *, hypershift: bool) -> Any | None:
+    layer_name = "hypershift" if hypershift else "standard"
+    layer = profile.get(layer_name) or {}
+    bindings = layer.get("bindings") or {}
+    return bindings.get(logical)
+
+
+def describe_press(
+    code: int,
+    *,
+    pressed: bool,
+    profile: dict[str, Any],
+    hypershift_held: bool,
+    ecodes: Any | None = None,
+) -> KeyLine:
+    logical = CODE_TO_LOGICAL.get(code, "?")
+    layer = "hypershift" if hypershift_held else "standard"
+    mapping = "(unknown logical — update LOGICAL_TO_CODE)"
+    if logical != "?":
+        hs_key = profile.get("hypershift_key") or "mode"
+        if logical == hs_key:
+            mapping = f"(hypershift modifier: {hs_key})"
+        else:
+            mapping = format_binding(binding_for_logical(profile, logical, hypershift=hypershift_held))
+    return KeyLine(
+        code=code,
+        ev_name=ev_key_name(code, ecodes),
+        logical=logical,
+        layer=layer,
+        mapping=mapping,
+        pressed=pressed,
+    )
+
+
+def format_key_line(line: KeyLine) -> str:
+    state = "DOWN" if line.pressed else "UP"
+    return (
+        f"{state}  {line.ev_name} ({line.code})  "
+        f"logical={line.logical}  layer={line.layer}  → {line.mapping}"
+    )
+
+
+def open_tartarus_devices() -> list[Any]:
+    """Open Tartarus evdev nodes (no grab). Raises RuntimeError if none / no evdev."""
+    try:
+        import evdev
+    except ImportError as exc:
+        raise RuntimeError("evdev is not installed") from exc
+
+    devices: list[Any] = []
+    for path in evdev.list_devices():
+        try:
+            d = evdev.InputDevice(path)
+        except OSError:
+            continue
+        if "tartarus" in (d.name or "").lower():
+            devices.append(d)
+    if not devices:
+        raise RuntimeError(
+            "No Tartarus evdev devices found. Is the keypad plugged in? "
+            "If the daemon is running it may have exclusive grab — stop it and retry."
+        )
+    return devices
+
+
+class LiveKeyMonitor:
+    """Background evdev listener that reports pressed keys + profile mappings."""
+
+    def __init__(self, on_update: UpdateFn, *, history: int = 40) -> None:
+        self._on_update = on_update
+        self._history = history
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._devices: list[Any] = []
+        self._pressed: dict[int, KeyLine] = {}
+        self._log: deque[str] = deque(maxlen=history)
+        self._hypershift = False
+        self._profile: dict[str, Any] = {}
+        self._ecodes: Any | None = None
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self) -> None:
+        if self.running:
+            return
+        self._stop.clear()
+        self._pressed.clear()
+        self._log.clear()
+        self._hypershift = False
+        self._profile = load_profile(get_active_profile_name())
+        self._devices = open_tartarus_devices()
+        from evdev import ecodes
+
+        self._ecodes = ecodes
+        self._thread = threading.Thread(target=self._run, name="tartarus-key-listen", daemon=True)
+        self._thread.start()
+        self._emit_status(
+            "Listening on "
+            + ", ".join(f"{d.path} ({d.name})" for d in self._devices)
+            + f" — profile={self._profile.get('name')}"
+        )
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+        self._thread = None
+        for d in self._devices:
+            try:
+                d.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self._devices = []
+        self._pressed.clear()
+        self._emit_status("Stopped")
+
+    def reload_profile(self) -> None:
+        try:
+            self._profile = load_profile(get_active_profile_name())
+            # Refresh mapping text for currently held keys
+            refreshed: dict[int, KeyLine] = {}
+            for code, line in self._pressed.items():
+                refreshed[code] = describe_press(
+                    code,
+                    pressed=True,
+                    profile=self._profile,
+                    hypershift_held=self._hypershift,
+                    ecodes=self._ecodes,
+                )
+            self._pressed = refreshed
+            self._emit_status(f"Profile reloaded: {self._profile.get('name')}")
+        except Exception as exc:  # noqa: BLE001
+            self._emit_status(f"Profile reload failed: {exc}")
+
+    def _emit_status(self, status: str) -> None:
+        self._publish(status=status)
+
+    def _publish(self, *, status: str | None = None) -> None:
+        pressed_lines = [format_key_line(self._pressed[c]) for c in sorted(self._pressed)]
+        payload = {
+            "status": status or "Listening",
+            "pressed": pressed_lines,
+            "log": list(self._log),
+            "hypershift": self._hypershift,
+            "profile": self._profile.get("name"),
+            "running": self.running or not self._stop.is_set(),
+        }
+        try:
+            self._on_update(payload)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("on_update failed: %s", exc)
+
+    def _run(self) -> None:
+        fds = {d.fd: d for d in self._devices}
+        try:
+            while not self._stop.is_set():
+                r, _, _ = select.select(list(fds), [], [], 0.25)
+                for fd in r:
+                    try:
+                        events = list(fds[fd].read())
+                    except OSError as exc:
+                        self._log.appendleft(f"device read error: {exc}")
+                        self._publish(status=f"Read error: {exc}")
+                        continue
+                    for event in events:
+                        self._handle_event(event)
+        finally:
+            self._publish(status="Stopped")
+
+    def _handle_event(self, event: Any) -> None:
+        ecodes = self._ecodes
+        if ecodes is None:
+            return
+        if event.type == ecodes.EV_KEY:
+            if event.value == 2:  # repeat
+                return
+            pressed = event.value == 1
+            code = int(event.code)
+            logical = CODE_TO_LOGICAL.get(code)
+            hs_key = self._profile.get("hypershift_key") or "mode"
+            if logical == hs_key:
+                self._hypershift = pressed
+
+            line = describe_press(
+                code,
+                pressed=pressed,
+                profile=self._profile,
+                hypershift_held=self._hypershift,
+                ecodes=ecodes,
+            )
+            text = format_key_line(line)
+            self._log.appendleft(text)
+            if pressed:
+                self._pressed[code] = line
+            else:
+                self._pressed.pop(code, None)
+            self._publish()
+            return
+
+        if event.type == ecodes.EV_REL and event.code == ecodes.REL_WHEEL:
+            logical = "scroll_up" if event.value > 0 else "scroll_down" if event.value < 0 else None
+            if not logical:
+                return
+            mapping = format_binding(
+                binding_for_logical(self._profile, logical, hypershift=self._hypershift)
+            )
+            layer = "hypershift" if self._hypershift else "standard"
+            text = (
+                f"WHEEL  REL_WHEEL ({event.code}) value={event.value}  "
+                f"logical={logical}  layer={layer}  → {mapping}"
+            )
+            self._log.appendleft(text)
+            self._publish()
+
+
+def hypershift_keycode(profile: dict[str, Any] | None = None) -> int | None:
+    data = profile or {}
+    logical = data.get("hypershift_key") or "mode"
+    return LOGICAL_TO_CODE.get(logical)

@@ -101,6 +101,9 @@ class BindingsController:
     def set_hypershift_key(self, profile_name: str, key: str) -> dict[str, Any]:
         return actions.set_hypershift_key(profile_name, key)
 
+    def apply_bindings(self) -> str:
+        return actions.apply_active_profile()
+
 
 class DaemonController:
     def start_daemon(self, profile: str | None = None, debug: bool = False) -> daemon_control.DaemonStatus:
@@ -131,6 +134,7 @@ class DaemonController:
 class DiagnoseController:
     def __init__(self) -> None:
         self.last_report: str = ""
+        self._monitor: Any | None = None
 
     def run_diagnose(
         self,
@@ -155,6 +159,26 @@ class DiagnoseController:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(self.last_report or "", encoding="utf-8")
         return target
+
+    def start_live_listen(self, on_update: Any) -> None:
+        from tartarus_v2.key_listen import LiveKeyMonitor
+
+        self.stop_live_listen()
+        self._monitor = LiveKeyMonitor(on_update)
+        self._monitor.start()
+
+    def stop_live_listen(self) -> None:
+        mon = self._monitor
+        self._monitor = None
+        if mon is not None:
+            mon.stop()
+
+    def reload_live_listen_profile(self) -> None:
+        if self._monitor is not None:
+            self._monitor.reload_profile()
+
+    def live_listen_running(self) -> bool:
+        return bool(self._monitor and self._monitor.running)
 
 
 class AppController:

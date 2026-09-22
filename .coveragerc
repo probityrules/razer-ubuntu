@@ -6,6 +6,7 @@ omit =
     */tartarus_v2/hid/chroma.py
     */tartarus_v2/input/remapper.py
     */tartarus_v2/input/macros.py
+    */tartarus_v2/key_listen.py
     */tartarus_v2/daemon.py
     */tartarus_v2/diagnose.py
     */tartarus_v2/gui/app.py

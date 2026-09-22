@@ -209,6 +209,36 @@ def test_short_label_keys() -> None:
         assert f"key_{n:02d}" in flat
 
 
+def test_key_listen_describe_and_format() -> None:
+    from tartarus_v2 import key_listen
+
+    profile = {
+        "name": "default",
+        "hypershift_key": "mode",
+        "standard": {"bindings": {"key_02": "w", "key_16": "ctrl"}},
+        "hypershift": {"bindings": {"key_02": "F2"}},
+    }
+    line = key_listen.describe_press(
+        16, pressed=True, profile=profile, hypershift_held=False, ecodes=None
+    )
+    assert line.logical == "key_02"
+    assert line.mapping == "w"
+    assert "DOWN" in key_listen.format_key_line(line)
+
+    hs = key_listen.describe_press(
+        16, pressed=True, profile=profile, hypershift_held=True, ecodes=None
+    )
+    assert hs.mapping == "F2"
+    assert key_listen.format_binding({"type": "macro", "steps": [{"tap": "a"}]}) == "macro(a)"
+    assert key_listen.format_binding(None) == "(no mapping)"
+
+    unknown = key_listen.describe_press(
+        9999, pressed=True, profile=profile, hypershift_held=False, ecodes=None
+    )
+    assert unknown.logical == "?"
+    assert "LOGICAL_TO_CODE" in unknown.mapping
+
+
 def test_permissions_status_and_fix(monkeypatch: pytest.MonkeyPatch) -> None:
     from tartarus_v2 import permissions
     from tartarus_v2.permissions import PermissionStatus

@@ -549,8 +549,29 @@ def build_bindings_page(window: Any) -> Any:
     bind_row = Adw.ActionRow(title="Binding")
     bind_row.add_suffix(binding_entry)
     status = Adw.ActionRow(title="Status", subtitle="Load a profile layer to edit")
-    state: dict[str, Any] = {"profile": None, "data": None, "layer": "standard"}
+    state: dict[str, Any] = {
+        "profile": None,
+        "data": None,
+        "layer": "standard",
+        "pending": 0,
+    }
     suppress_profile: dict[str, bool] = {"busy": False}
+
+    apply_btn = Gtk.Button(label="Apply")
+    apply_btn.add_css_class("suggested-action")
+    apply_btn.set_sensitive(False)
+
+    def _set_pending(delta: int = 0, *, clear: bool = False) -> None:
+        if clear:
+            state["pending"] = 0
+        else:
+            state["pending"] = max(0, int(state["pending"]) + delta)
+        n = int(state["pending"])
+        apply_btn.set_sensitive(n > 0)
+        if n > 0:
+            apply_btn.set_tooltip_text(f"{n} unsaved-to-daemon change(s) — click Apply to reload")
+        else:
+            apply_btn.set_tooltip_text("No pending remaps to apply")
 
     def current_layer() -> str:
         return "hypershift" if hs_btn.get_active() else "standard"
@@ -629,6 +650,7 @@ def build_bindings_page(window: Any) -> Any:
             if hs in keys:
                 hs_row.set_selected(keys.index(hs))
             _sync_keymap_bindings()
+            _set_pending(clear=True)
             status.set_subtitle(f"Loaded {state['profile']} · {current_layer_label()}")
             if toast:
                 _toast(window, f"Loaded {state['profile']}")
@@ -688,8 +710,9 @@ def build_bindings_page(window: Any) -> Any:
             state["data"] = ctrl.save_bindings(profile, layer, bindings, hs_key)
             state["profile"] = profile
             _sync_keymap_bindings()
-            status.set_subtitle(f"Saved {logical} on {current_layer_label()}")
-            _toast(window, f"Saved {logical} (daemon reloads if running)")
+            _set_pending(1)
+            status.set_subtitle(f"Saved {logical} on {current_layer_label()} · pending Apply")
+            _toast(window, f"Saved {logical} — press Apply to reload the daemon")
         except Exception as exc:  # noqa: BLE001
             _error(window, "Could not save binding", str(exc))
 
@@ -699,9 +722,26 @@ def build_bindings_page(window: Any) -> Any:
                 _load_named()
             key = keys[hs_row.get_selected()]
             state["data"] = ctrl.set_hypershift_key(state["profile"], key)
-            _toast(window, f"Hypershift key: {key} (daemon reloads if running)")
+            _set_pending(1)
+            _toast(window, f"Hypershift key: {key} — press Apply to reload the daemon")
         except Exception as exc:  # noqa: BLE001
             _error(window, "Could not set Hypershift key", str(exc))
+
+    def _apply(_b: Any = None) -> None:
+        if int(state["pending"]) <= 0:
+            return
+        try:
+            detail = ctrl.apply_bindings()
+            _set_pending(clear=True)
+            if "not running" in detail.lower():
+                _toast(window, "Bindings saved on disk; start the daemon to use them")
+            elif "signaled" in detail.lower() or "reload" in detail.lower():
+                _toast(window, "Applied — daemon reloaded active profile")
+            else:
+                _toast(window, f"Apply: {detail}")
+            status.set_subtitle(f"Applied ({detail})")
+        except Exception as exc:  # noqa: BLE001
+            _error(window, "Could not apply bindings", str(exc))
 
     profiles_btn.connect("clicked", _go_profiles)
     normal_btn.connect("toggled", _on_layer_toggled)
@@ -716,11 +756,18 @@ def build_bindings_page(window: Any) -> Any:
     ):
         row = Adw.ActionRow(title=title)
         b = Gtk.Button(label="Run")
-        if title.startswith("Save"):
-            b.add_css_class("suggested-action")
         b.connect("clicked", cb)
         row.add_suffix(b)
         group.add(row)
+
+    apply_row = Adw.ActionRow(
+        title="Apply",
+        subtitle="Reload the running daemon with pending binding changes",
+    )
+    apply_btn.connect("clicked", _apply)
+    apply_row.add_suffix(apply_btn)
+    group.add(apply_row)
+    _set_pending(clear=True)
     prefs.add(group)
 
     outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -825,10 +872,193 @@ def build_daemon_page(window: Any) -> Any:
 
 
 def build_diagnose_page(window: Any) -> Any:
-    from gi.repository import Adw, Gdk, Gtk
+    from gi.repository import Adw, Gdk, GLib, Gtk
+
+    from tartarus_v2.gui.controllers import DaemonController
 
     ctrl = DiagnoseController()
+    daemon_ctrl = DaemonController()
     page = Adw.PreferencesPage(title="Diagnose", name="diagnose")
+
+    live = Adw.PreferencesGroup(
+        title="Live key listen",
+        description=(
+            "Shows EV_KEY codes for Tartarus presses and the active profile mapping. "
+            "If the remap daemon is running, you will be asked to pause it while listening."
+        ),
+    )
+    live_status = Adw.ActionRow(title="Status", subtitle="Idle")
+    pressed_label = Gtk.Label(
+        label="(none)",
+        xalign=0,
+        wrap=True,
+        selectable=True,
+    )
+    pressed_label.add_css_class("monospace")
+    # Multiline live panels hosted below the preferences page
+    pressed_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    pressed_box.set_margin_start(12)
+    pressed_box.set_margin_end(12)
+    pressed_box.set_margin_bottom(8)
+    pressed_hdr = Gtk.Label(label="Currently pressed", xalign=0)
+    pressed_hdr.add_css_class("heading")
+    pressed_box.append(pressed_hdr)
+    pressed_box.append(pressed_label)
+
+    log_view = Gtk.TextView(editable=False, monospace=True, cursor_visible=False)
+    log_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+    log_buf = log_view.get_buffer()
+    log_scroll = Gtk.ScrolledWindow()
+    log_scroll.set_min_content_height(160)
+    log_scroll.set_child(log_view)
+    log_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    log_box.set_margin_start(12)
+    log_box.set_margin_end(12)
+    log_box.set_margin_bottom(8)
+    log_hdr = Gtk.Label(label="Recent events", xalign=0)
+    log_hdr.add_css_class("heading")
+    log_box.append(log_hdr)
+    log_box.append(log_scroll)
+
+    start_btn = Gtk.Button(label="Start listening")
+    start_btn.add_css_class("suggested-action")
+    stop_btn = Gtk.Button(label="Stop")
+    stop_btn.set_sensitive(False)
+    reload_btn = Gtk.Button(label="Reload profile")
+    reload_btn.set_sensitive(False)
+
+    listen_state: dict[str, Any] = {"paused_daemon": False, "active": False}
+
+    def _set_listening_ui(active: bool) -> None:
+        listen_state["active"] = active
+        start_btn.set_sensitive(not active)
+        stop_btn.set_sensitive(active)
+        reload_btn.set_sensitive(active)
+
+    def _on_listen_update(payload: dict[str, Any]) -> None:
+        def apply() -> bool:
+            hs = " · Hypershift ON" if payload.get("hypershift") else ""
+            prof = payload.get("profile") or "—"
+            live_status.set_subtitle(f"{payload.get('status', '')} · profile={prof}{hs}")
+            pressed = payload.get("pressed") or []
+            pressed_label.set_label("\n".join(pressed) if pressed else "(none)")
+            log_lines = payload.get("log") or []
+            log_buf.set_text("\n".join(log_lines) if log_lines else "")
+            status = str(payload.get("status", ""))
+            if not payload.get("running", True) and "Stopped" in status and listen_state["active"]:
+                # Listener died unexpectedly — restore daemon if we paused it.
+                _finish_listen(restart_daemon=True, from_callback=True)
+            return False
+
+        GLib.idle_add(apply)
+
+    def _begin_listen() -> None:
+        try:
+            ctrl.start_live_listen(_on_listen_update)
+            _set_listening_ui(True)
+            paused = " (daemon paused)" if listen_state["paused_daemon"] else ""
+            _toast(window, f"Listening for Tartarus keys{paused}")
+        except Exception as exc:  # noqa: BLE001
+            if listen_state["paused_daemon"]:
+                _restart_paused_daemon()
+            _set_listening_ui(False)
+            _error(window, "Could not start key listen", str(exc))
+
+    def _restart_paused_daemon() -> None:
+        if not listen_state["paused_daemon"]:
+            return
+        listen_state["paused_daemon"] = False
+        try:
+            st = daemon_ctrl.start_daemon()
+            if st.running:
+                _toast(window, f"Daemon restarted ({st.detail})")
+            else:
+                _error(window, "Could not restart daemon", st.detail)
+        except Exception as exc:  # noqa: BLE001
+            _error(window, "Could not restart daemon", str(exc))
+
+    def _finish_listen(*, restart_daemon: bool, from_callback: bool = False) -> None:
+        try:
+            ctrl.stop_live_listen()
+        except Exception as exc:  # noqa: BLE001
+            if not from_callback:
+                _error(window, "Could not stop key listen", str(exc))
+        _set_listening_ui(False)
+        live_status.set_subtitle("Idle")
+        pressed_label.set_label("(none)")
+        if restart_daemon:
+            _restart_paused_daemon()
+        else:
+            listen_state["paused_daemon"] = False
+
+    def _start_listen(_b: Any = None) -> None:
+        st = daemon_ctrl.daemon_status()
+        if not st.running:
+            listen_state["paused_daemon"] = False
+            _begin_listen()
+            return
+
+        dialog = Adw.AlertDialog.new(
+            "Pause remap daemon?",
+            "Live key listen needs exclusive access to the Tartarus input devices. "
+            "The remap daemon is running and grabs those devices.\n\n"
+            "Stop the daemon to listen? It will be restarted automatically when you stop listening.",
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("stop", "Stop daemon and listen")
+        dialog.set_response_appearance("stop", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("stop")
+        dialog.set_close_response("cancel")
+
+        def on_response(_d: Any, response: str) -> None:
+            if response != "stop":
+                return
+
+            def work() -> Any:
+                return daemon_ctrl.stop_daemon()
+
+            def done(result: Any, error: BaseException | None) -> None:
+                if error:
+                    _error(window, "Could not stop daemon", str(error))
+                    return
+                if result is not None and getattr(result, "running", False):
+                    _error(window, "Could not stop daemon", getattr(result, "detail", "still running"))
+                    return
+                listen_state["paused_daemon"] = True
+                _toast(window, "Daemon stopped for live listen")
+                _begin_listen()
+
+            run_in_thread(work, done)
+
+        dialog.connect("response", on_response)
+        dialog.present(window)
+
+    def _stop_listen(_b: Any = None) -> None:
+        _finish_listen(restart_daemon=True)
+
+    def _reload_profile(_b: Any = None) -> None:
+        try:
+            ctrl.reload_live_listen_profile()
+            _toast(window, "Profile mapping refreshed")
+        except Exception as exc:  # noqa: BLE001
+            _error(window, "Could not reload profile", str(exc))
+
+    live.add(live_status)
+    for title, btn in (
+        ("Start listening", start_btn),
+        ("Stop", stop_btn),
+        ("Reload profile map", reload_btn),
+    ):
+        row = Adw.ActionRow(title=title)
+        row.add_suffix(btn)
+        live.add(row)
+    start_btn.connect("clicked", _start_listen)
+    stop_btn.connect("clicked", _stop_listen)
+    reload_btn.connect("clicked", _reload_profile)
+
+    # PreferencesPage can't host free widgets easily — wrap page + extras
+    page.add(live)
+
     group = Adw.PreferencesGroup(
         title="Remote debug dump",
         description="CLI: tartarus-v2 diagnose — paste between COPY banners",
@@ -840,7 +1070,7 @@ def build_diagnose_page(window: Any) -> Any:
     skip_row.set_activatable_widget(skip)
 
     listen = Gtk.SpinButton.new_with_range(0, 30, 1)
-    listen_row = Adw.ActionRow(title="Listen seconds")
+    listen_row = Adw.ActionRow(title="Listen seconds (dump only)")
     listen_row.add_suffix(listen)
 
     out_entry = Gtk.Entry(text="~/tartarus-diagnose.log")
@@ -876,8 +1106,11 @@ def build_diagnose_page(window: Any) -> Any:
         if not ctrl.last_report:
             _toast(window, "Run diagnose first")
             return
-        saved = ctrl.save_report(out_entry.get_text().strip() or "~/tartarus-diagnose.log")
-        _toast(window, f"Saved {saved}")
+        try:
+            saved = ctrl.save_report(out_entry.get_text().strip() or "~/tartarus-diagnose.log")
+            _toast(window, f"Saved {saved}")
+        except Exception as exc:  # noqa: BLE001
+            _error(window, "Could not save report", str(exc))
 
     def _preview(_b: Any = None) -> None:
         dialog = Gtk.Window(title="Diagnose report", transient_for=window, modal=True)
@@ -904,4 +1137,27 @@ def build_diagnose_page(window: Any) -> Any:
         group.add(row)
 
     page.add(group)
-    return page
+
+    # Host live display widgets below preferences via outer scroll
+    outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+    scroll = Gtk.ScrolledWindow()
+    scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    scroll.set_vexpand(True)
+    content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    content.append(page)
+    content.append(pressed_box)
+    content.append(log_box)
+    scroll.set_child(content)
+    outer.append(scroll)
+
+    # Stop listener and restore daemon when window closes
+    def _cleanup(*_args: Any) -> None:
+        if listen_state["active"] or listen_state["paused_daemon"]:
+            _finish_listen(restart_daemon=True)
+
+    try:
+        window.connect("close-request", lambda *_: (_cleanup(), False)[1])
+    except Exception:  # noqa: BLE001
+        pass
+
+    return outer
