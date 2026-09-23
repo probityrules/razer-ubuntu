@@ -138,7 +138,8 @@ def load_profile(name: str = DEFAULT_PROFILE_NAME) -> dict[str, Any]:
     data.setdefault("standard", {"bindings": {}})
     data.setdefault("hypershift", {"bindings": {}})
     data.setdefault("lighting", {"effect": "spectrum", "brightness": 128})
-    return data
+    # Isolate callers from each other and from future in-place mutations.
+    return copy.deepcopy(data)
 
 
 def save_profile(profile: dict[str, Any], name: str | None = None) -> Path:

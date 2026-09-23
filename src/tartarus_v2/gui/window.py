@@ -104,7 +104,7 @@ def create_main_window(app: Any, debug: bool = False) -> Any:
     split.set_sidebar(sidebar_page)
     split.set_content(content_page)
 
-    # App menu + persistent daemon LED (all pages)
+    # App menu + persistent daemon LED (+ active profile when ON)
     menu = Gio.Menu()
     menu.append("Report issue…", "app.report_issue")
     menu.append("About Tartarus V2", "app.about")
@@ -114,10 +114,16 @@ def create_main_window(app: Any, debug: bool = False) -> Any:
     menu_btn.set_menu_model(menu)
     content_header.pack_end(menu_btn)
 
+    daemon_status_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+    daemon_status_box.set_valign(Gtk.Align.CENTER)
     daemon_led = Gtk.Label(label="●")
-    daemon_led.set_tooltip_text("Remap daemon")
     daemon_led.add_css_class("title-2")
-    content_header.pack_start(daemon_led)
+    daemon_profile = Gtk.Label(label="")
+    daemon_profile.add_css_class("dim-label")
+    daemon_profile.set_max_width_chars(18)
+    daemon_status_box.append(daemon_led)
+    daemon_status_box.append(daemon_profile)
+    content_header.pack_start(daemon_status_box)
 
     css = Gtk.CssProvider()
     css.load_from_data(
@@ -126,7 +132,9 @@ def create_main_window(app: Any, debug: bool = False) -> Any:
         label.daemon-off { color: #9a9996; }
         """
     )
-    from gi.repository import Gdk, GLib
+    from gi.repository import Gdk, GLib, Pango
+
+    daemon_profile.set_ellipsize(Pango.EllipsizeMode.END)
 
     display = Gdk.Display.get_default()
     if display is not None:
@@ -136,32 +144,56 @@ def create_main_window(app: Any, debug: bool = False) -> Any:
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
 
-    def _paint_daemon_led(running: bool) -> None:
+    def _paint_daemon_led(running: bool, profile: str | None = None) -> None:
         daemon_led.remove_css_class("daemon-on")
         daemon_led.remove_css_class("daemon-off")
         if running:
             daemon_led.add_css_class("daemon-on")
-            daemon_led.set_tooltip_text("Remap daemon: ON")
+            name = (profile or "").strip()
+            if not name:
+                try:
+                    from tartarus_v2.profiles import get_active_profile_name
+
+                    name = get_active_profile_name()
+                except Exception:  # noqa: BLE001
+                    name = "—"
+            daemon_profile.set_label(name)
+            daemon_profile.set_visible(True)
+            daemon_led.set_tooltip_text(f"Remap daemon: ON · profile={name}")
+            daemon_profile.set_tooltip_text(f"Active profile: {name}")
         else:
             daemon_led.add_css_class("daemon-off")
+            daemon_profile.set_label("")
+            daemon_profile.set_visible(False)
             daemon_led.set_tooltip_text("Remap daemon: OFF")
+            daemon_profile.set_tooltip_text("")
 
-    def _poll_daemon_led() -> bool:
+    def refresh_header_daemon() -> None:
+        """Update LED + active profile label (call after profile/daemon changes)."""
         try:
             from tartarus_v2.daemon_control import status as daemon_status
+            from tartarus_v2.profiles import get_active_profile_name
 
-            _paint_daemon_led(daemon_status().running)
+            st = daemon_status()
+            _paint_daemon_led(
+                st.running,
+                get_active_profile_name() if st.running else None,
+            )
         except Exception:  # noqa: BLE001
             _paint_daemon_led(False)
+
+    def _poll_daemon_led() -> bool:
+        refresh_header_daemon()
         return True
 
-    _paint_daemon_led(False)
+    refresh_header_daemon()
     GLib.timeout_add_seconds(2, _poll_daemon_led)
 
     toast_overlay.set_child(split)
     window.set_content(toast_overlay)
     window._stack = stack  # noqa: SLF001
     window.navigate_to = navigate_to  # noqa: SLF001
+    window.refresh_header_daemon = refresh_header_daemon  # noqa: SLF001
     return window
 
 

@@ -69,7 +69,7 @@ Native **Libadwaita** app (`Adw.Application` + sidebar navigation):
 5. **Daemon** — start/stop, **Start at login** autostart, debug toggle, **Fix permissions**
 6. **Diagnose** — live key listen (physical EV_KEY or remapped virtual output via daemon toggle), dump/copy/save
 
-The header shows a persistent **daemon LED** (green = running, grey = stopped). Device info refreshes automatically while that page is open.
+The header shows a persistent **daemon LED** (green = running, grey = stopped). When the daemon is on, the **active profile name** appears beside the LED and updates when you switch profiles (Profiles page or Bindings dropdown). Device info refreshes automatically while that page is open.
 
 App menu → **Report issue…** opens a Notefully-style dialog (kind, author, note). Submits to your Notefully relay with a diagnose dump and log tail attached in the report context (no screenshots).
 

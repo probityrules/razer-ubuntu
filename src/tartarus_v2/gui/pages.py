@@ -28,6 +28,16 @@ def _toast(window: Any, message: str) -> None:
         pass
 
 
+def _refresh_header_daemon(window: Any) -> None:
+    """Refresh header LED + active profile label immediately."""
+    refresh = getattr(window, "refresh_header_daemon", None)
+    if callable(refresh):
+        try:
+            refresh()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _error(window: Any, title: str, message: str) -> None:
     """Show a toast and an alert dialog for user-visible failures."""
     _toast(window, f"{title}: {message}")
@@ -385,6 +395,7 @@ def build_profiles_page(window: Any) -> Any:
                 try:
                     ctrl.activate_profile(profile_name)
                     reload()
+                    _refresh_header_daemon(window)
                     _toast(window, f"Active: {profile_name} (daemon reloads if running)")
                 except Exception as exc:  # noqa: BLE001
                     _error(window, "Could not activate profile", str(exc))
@@ -687,8 +698,11 @@ def build_bindings_page(window: Any) -> Any:
             try:
                 if hs in keys:
                     hs_row.set_selected(keys.index(hs))
+                else:
+                    hs_row.set_selected(0)
             finally:
                 suppress_profile["busy"] = False
+            # Force keymap + entry fields to the newly loaded profile immediately.
             _sync_keymap()
             _fill_entries_for(state.get("selected"))
             _set_dirty(False)
@@ -697,6 +711,19 @@ def build_bindings_page(window: Any) -> Any:
                 _toast(window, f"Loaded {requested}")
         except Exception as exc:  # noqa: BLE001
             _error(window, "Could not load profile", str(exc))
+
+    def _switch_to_profile(name: str, *, toast: bool = True) -> None:
+        """Activate + load + refresh UI for a profile (Bindings dropdown / page map)."""
+        previous = state.get("profile")
+        if state.get("dirty") and previous is not None and previous != name:
+            _toast(window, "Discarded unpublished binding edits")
+        profiles_ctrl.activate_profile(name)
+        _load_named(name, toast=toast and previous != name)
+        # Refresh "(active)" markers without re-entering via notify::selected.
+        _reload_profile_combo(prefer=name)
+        _refresh_header_daemon(window)
+        # Highlight monitor must re-bind to the new profile map.
+        _start_highlight()
 
     def _on_profile_selected(_row: Any = None, _pspec: Any = None) -> None:
         if suppress_profile["busy"]:
@@ -707,14 +734,15 @@ def build_bindings_page(window: Any) -> Any:
         if not (0 <= idx < len(profile_names)):
             return
         name = profile_names[idx]
-        if state.get("profile") == name and state.get("draft") and not state.get("dirty"):
+        # Combo rebuild after activate re-fires notify — avoid a reload loop, but
+        # still push the current draft onto the keymap if we are already on this profile.
+        if state.get("profile") == name and state.get("draft") is not None and not state.get("dirty"):
+            _sync_keymap()
+            _fill_entries_for(state.get("selected"))
+            _refresh_header_daemon(window)
             return
-        if state.get("dirty") and state.get("profile") != name:
-            # Discard unpublished edits when switching profiles.
-            _toast(window, "Discarded unpublished binding edits")
         try:
-            profiles_ctrl.activate_profile(name)
-            _load_named(name)
+            _switch_to_profile(name, toast=True)
         except Exception as exc:  # noqa: BLE001
             _error(window, "Could not switch profile", str(exc))
 
@@ -764,6 +792,8 @@ def build_bindings_page(window: Any) -> Any:
         if not state.get("dirty") or not state.get("draft") or not state.get("profile"):
             return
         try:
+            import copy
+
             draft = state["draft"]
             profile = state["profile"]
             hs_key = draft.get("hypershift_key") or keys[hs_row.get_selected()]
@@ -772,12 +802,13 @@ def build_bindings_page(window: Any) -> Any:
             hyp = dict((draft.get("hypershift") or {}).get("bindings") or {})
             ctrl.save_bindings(profile, "standard", std, hs_key)
             data = ctrl.save_bindings(profile, "hypershift", hyp, hs_key)
-            state["draft"] = data
-            import copy
-
-            state["baseline"] = copy.deepcopy(data)
+            # Keep draft isolated from the returned (and any future) profile object.
+            state["draft"] = copy.deepcopy(data)
+            state["draft"]["name"] = profile
+            state["baseline"] = copy.deepcopy(state["draft"])
             detail = ctrl.apply_bindings()
             _set_dirty(False)
+            _refresh_header_daemon(window)
             if "not running" in detail.lower():
                 _toast(window, "Bindings saved; start the daemon to use them")
             elif "signaled" in detail.lower() or "reload" in detail.lower():
@@ -860,19 +891,22 @@ def build_bindings_page(window: Any) -> Any:
             from tartarus_v2.profiles import get_active_profile_name
 
             active = get_active_profile_name()
-            if active in profile_names:
-                suppress_profile["busy"] = True
-                try:
-                    profile_row.set_selected(profile_names.index(active))
-                finally:
-                    suppress_profile["busy"] = False
-            if state.get("dirty") and state.get("profile") == active:
+            if state.get("dirty") and state.get("profile") == active and state.get("draft"):
+                # Keep unpublished edits for the still-active profile.
+                if active in profile_names:
+                    suppress_profile["busy"] = True
+                    try:
+                        profile_row.set_selected(profile_names.index(active))
+                    finally:
+                        suppress_profile["busy"] = False
+                _sync_keymap()
+                _fill_entries_for(state.get("selected"))
                 _start_highlight()
+                _refresh_header_daemon(window)
                 return
-            _load_named(active, toast=False)
+            _switch_to_profile(active, toast=False)
         except Exception:  # noqa: BLE001
-            pass
-        _start_highlight()
+            _start_highlight()
 
     outer.connect("map", _on_bindings_map)
     outer.connect("unmap", lambda *_: _stop_highlight())
@@ -938,6 +972,7 @@ def build_daemon_page(window: Any) -> Any:
         try:
             st = ctrl.start_daemon(debug=debug_switch.get_active())
             status_row.set_subtitle(st.detail + (f" pid={st.pid}" if st.pid else ""))
+            _refresh_header_daemon(window)
             if st.running:
                 _toast(window, st.detail)
             else:
@@ -949,6 +984,7 @@ def build_daemon_page(window: Any) -> Any:
         try:
             st = ctrl.stop_daemon()
             status_row.set_subtitle(st.detail)
+            _refresh_header_daemon(window)
             _toast(window, st.detail)
         except Exception as exc:  # noqa: BLE001
             _error(window, "Could not stop daemon", str(exc))
@@ -1173,6 +1209,7 @@ def build_diagnose_page(window: Any) -> Any:
             finally:
                 listen_state["suppress_daemon"] = False
             _sync_daemon_row()
+            _refresh_header_daemon(window)
             detail = getattr(result, "detail", "") or ""
             if running != want_on:
                 _error(

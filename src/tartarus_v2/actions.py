@@ -117,12 +117,15 @@ def save_bindings(
     bindings: dict[str, Any],
     hypershift_key: str | None = None,
 ) -> dict[str, Any]:
+    import copy
+
     if layer not in ("standard", "hypershift"):
         raise ValueError("layer must be standard or hypershift")
     data = prof.load_profile(profile_name)
-    data.setdefault(layer, {})["bindings"] = bindings
+    data.setdefault(layer, {})["bindings"] = copy.deepcopy(bindings)
     if hypershift_key is not None:
         data["hypershift_key"] = hypershift_key
+    # Always persist under the requested filename, never an embedded stale name.
     prof.save_profile(data, profile_name)
     return data
 

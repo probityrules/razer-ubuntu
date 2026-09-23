@@ -497,7 +497,9 @@ class KeyHighlightMonitor:
         return self._thread is not None and self._thread.is_alive()
 
     def set_profile(self, profile: dict[str, Any]) -> None:
-        self._profile = dict(profile or {})
+        import copy
+
+        self._profile = copy.deepcopy(profile or {})
 
     def start(self, *, prefer: str | None = None) -> None:
         if self.running:
