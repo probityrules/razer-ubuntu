@@ -55,8 +55,19 @@ def run_gui(debug: bool = False) -> int:
             show_about(state["window"])
 
     def on_report_issue(_action: Gio.SimpleAction, _param: None) -> None:
-        if state["window"] is not None:
-            show_report_issue_dialog(state["window"])
+        win = state["window"]
+        if win is None:
+            log.warning("Report issue: no window yet")
+            return
+        try:
+            show_report_issue_dialog(win)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Report issue action failed")
+            try:
+                if getattr(win, "_toast_overlay", None):
+                    win._toast_overlay.add_toast(Adw.Toast.new(f"Report issue failed: {exc}"))
+            except Exception:  # noqa: BLE001
+                pass
 
     def on_quit(_action: Gio.SimpleAction, _param: None) -> None:
         app.quit()
