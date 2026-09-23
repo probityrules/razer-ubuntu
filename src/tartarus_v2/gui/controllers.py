@@ -160,12 +160,12 @@ class DiagnoseController:
         target.write_text(self.last_report or "", encoding="utf-8")
         return target
 
-    def start_live_listen(self, on_update: Any) -> None:
+    def start_live_listen(self, on_update: Any, *, prefer: str | None = None) -> None:
         from tartarus_v2.key_listen import LiveKeyMonitor
 
         self.stop_live_listen()
         self._monitor = LiveKeyMonitor(on_update)
-        self._monitor.start()
+        self._monitor.start(prefer=prefer)
 
     def stop_live_listen(self) -> None:
         mon = self._monitor

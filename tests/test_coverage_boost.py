@@ -255,6 +255,12 @@ def test_key_listen_describe_and_format() -> None:
     assert unknown.logical == "?"
     assert "LOGICAL_TO_CODE" in unknown.mapping
 
+    virt = key_listen.describe_virtual_press(
+        17, pressed=True, profile=profile, hypershift_held=False, ecodes=None
+    )
+    assert virt.pressed
+    assert "virtual" in virt.mapping
+
 
 def test_permissions_status_and_fix(monkeypatch: pytest.MonkeyPatch) -> None:
     from tartarus_v2 import permissions

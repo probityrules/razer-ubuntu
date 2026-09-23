@@ -979,11 +979,16 @@ def build_diagnose_page(window: Any) -> Any:
     live = Adw.PreferencesGroup(
         title="Live key listen",
         description=(
-            "Shows EV_KEY codes for Tartarus presses and the active profile mapping. "
-            "The remap daemon is paused automatically while this page is open, "
-            "and restarted when you leave Diagnose."
+            "Same source selection as Bindings key highlight. Use the remap "
+            "daemon toggle to choose physical EV_KEY vs remapped virtual output."
         ),
     )
+
+    daemon_switch = Gtk.Switch()
+    daemon_row = Adw.ActionRow(title="Remap daemon")
+    daemon_row.add_suffix(daemon_switch)
+    daemon_row.set_activatable_widget(daemon_switch)
+
     live_status = Adw.ActionRow(title="Status", subtitle="Idle")
     pressed_label = Gtk.Label(
         label="(none)",
@@ -992,7 +997,6 @@ def build_diagnose_page(window: Any) -> Any:
         selectable=True,
     )
     pressed_label.add_css_class("monospace")
-    # Multiline live panels hosted below the preferences page
     pressed_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
     pressed_box.set_margin_start(12)
     pressed_box.set_margin_end(12)
@@ -1025,11 +1029,31 @@ def build_diagnose_page(window: Any) -> Any:
     reload_btn.set_sensitive(False)
 
     listen_state: dict[str, Any] = {
-        "paused_daemon": False,
         "active": False,
-        "page_focused": False,
-        "pause_token": 0,
+        "suppress_daemon": False,
+        "daemon_busy": False,
+        "restarting": False,
     }
+
+    def _listen_explain(daemon_on: bool) -> str:
+        if daemon_on:
+            return (
+                "On — listening to the virtual keyboard (bound / remapped output)."
+            )
+        return "Off — reporting physical Tartarus EV_KEY codes."
+
+    def _prefer_mode() -> str:
+        return "virtual" if daemon_switch.get_active() else "physical"
+
+    def _sync_daemon_row(*, from_status: bool = False) -> None:
+        if from_status:
+            running = bool(daemon_ctrl.daemon_status().running)
+            listen_state["suppress_daemon"] = True
+            try:
+                daemon_switch.set_active(running)
+            finally:
+                listen_state["suppress_daemon"] = False
+        daemon_row.set_subtitle(_listen_explain(daemon_switch.get_active()))
 
     def _set_listening_ui(active: bool) -> None:
         listen_state["active"] = active
@@ -1039,147 +1063,141 @@ def build_diagnose_page(window: Any) -> Any:
 
     def _on_listen_update(payload: dict[str, Any]) -> None:
         def apply() -> bool:
+            mode = payload.get("mode") or ""
+            if mode == "physical":
+                mode_txt = "physical EV_KEY"
+            elif mode == "virtual":
+                mode_txt = "virtual output"
+            elif mode:
+                mode_txt = str(mode)
+            else:
+                mode_txt = "—"
             hs = " · Hypershift ON" if payload.get("hypershift") else ""
             prof = payload.get("profile") or "—"
-            live_status.set_subtitle(f"{payload.get('status', '')} · profile={prof}{hs}")
+            live_status.set_subtitle(
+                f"{payload.get('status', '')} · {mode_txt} · profile={prof}{hs}"
+            )
             pressed = payload.get("pressed") or []
             pressed_label.set_label("\n".join(pressed) if pressed else "(none)")
             log_lines = payload.get("log") or []
             log_buf.set_text("\n".join(log_lines) if log_lines else "")
             status = str(payload.get("status", ""))
-            if not payload.get("running", True) and "Stopped" in status and listen_state["active"]:
-                # Listener died unexpectedly — keep daemon paused while page is focused.
-                _finish_listen(restart_daemon=False, from_callback=True)
+            if (
+                not payload.get("running", True)
+                and "Stopped" in status
+                and listen_state["active"]
+                and not listen_state["restarting"]
+            ):
+                _set_listening_ui(False)
+                live_status.set_subtitle("Idle")
             return False
 
         GLib.idle_add(apply)
 
     def _begin_listen() -> None:
         try:
-            ctrl.start_live_listen(_on_listen_update)
+            prefer = _prefer_mode()
+            ctrl.start_live_listen(_on_listen_update, prefer=prefer)
             _set_listening_ui(True)
-            paused = " (daemon paused)" if listen_state["paused_daemon"] else ""
-            _toast(window, f"Listening for Tartarus keys{paused}")
+            _toast(
+                window,
+                "Listening to remapped output"
+                if prefer == "virtual"
+                else "Listening to physical EV_KEY",
+            )
         except Exception as exc:  # noqa: BLE001
             _set_listening_ui(False)
             _error(window, "Could not start key listen", str(exc))
 
-    def _restart_paused_daemon() -> None:
-        if not listen_state["paused_daemon"]:
-            return
-        listen_state["paused_daemon"] = False
-        try:
-            st = daemon_ctrl.start_daemon()
-            if st.running:
-                _toast(window, f"Daemon restarted ({st.detail})")
-            else:
-                _error(window, "Could not restart daemon", st.detail)
-        except Exception as exc:  # noqa: BLE001
-            _error(window, "Could not restart daemon", str(exc))
-
-    def _finish_listen(*, restart_daemon: bool, from_callback: bool = False) -> None:
+    def _finish_listen(*, from_callback: bool = False) -> None:
+        listen_state["restarting"] = False
         try:
             ctrl.stop_live_listen()
         except Exception as exc:  # noqa: BLE001
             if not from_callback:
                 _error(window, "Could not stop key listen", str(exc))
         _set_listening_ui(False)
-        if listen_state["page_focused"]:
-            live_status.set_subtitle("Idle · remap daemon paused (Diagnose page)")
-        else:
-            live_status.set_subtitle("Idle")
-        pressed_label.set_label("(none)")
-        if restart_daemon:
-            _restart_paused_daemon()
-
-    def _pause_daemon_for_page() -> None:
-        """Stop remap daemon so Diagnose can open Tartarus devices."""
-        if listen_state["page_focused"]:
-            return
-        listen_state["page_focused"] = True
-        listen_state["pause_token"] = int(listen_state["pause_token"]) + 1
-        token = int(listen_state["pause_token"])
-
-        st = daemon_ctrl.daemon_status()
-        if not st.running:
-            live_status.set_subtitle("Idle · remap daemon not running")
-            return
-        if listen_state["paused_daemon"]:
-            live_status.set_subtitle("Idle · remap daemon paused (Diagnose page)")
-            return
-
-        live_status.set_subtitle("Pausing remap daemon…")
-
-        def work() -> Any:
-            return daemon_ctrl.stop_daemon()
-
-        def done(result: Any, error: BaseException | None) -> None:
-            if token != int(listen_state["pause_token"]):
-                return
-            if error:
-                _error(window, "Could not pause daemon", str(error))
-                return
-            if result is not None and getattr(result, "running", False):
-                _error(
-                    window,
-                    "Could not pause daemon",
-                    getattr(result, "detail", "still running"),
-                )
-                return
-            listen_state["paused_daemon"] = True
-            if not listen_state["page_focused"]:
-                # Left Diagnose before stop finished — restore remapping.
-                _restart_paused_daemon()
-                return
-            live_status.set_subtitle("Idle · remap daemon paused (Diagnose page)")
-            _toast(window, "Remap daemon paused while on Diagnose")
-
-        run_in_thread(work, done)
-
-    def _resume_daemon_for_page() -> None:
-        """Leaving Diagnose: stop listen and restore remap daemon if we paused it."""
-        if not listen_state["page_focused"]:
-            return
-        listen_state["page_focused"] = False
-        listen_state["pause_token"] = int(listen_state["pause_token"]) + 1
-        if listen_state["active"]:
-            _finish_listen(restart_daemon=True)
-        elif listen_state["paused_daemon"]:
-            _restart_paused_daemon()
         live_status.set_subtitle("Idle")
+        pressed_label.set_label("(none)")
 
-    def _ensure_daemon_paused_then_listen() -> None:
-        st = daemon_ctrl.daemon_status()
-        if not st.running:
-            _begin_listen()
+    def _restart_listen_if_active() -> None:
+        if not listen_state["active"]:
             return
+        listen_state["restarting"] = True
+        try:
+            ctrl.stop_live_listen()
+        except Exception:  # noqa: BLE001
+            pass
+
+        def restart() -> bool:
+            listen_state["restarting"] = False
+            if not listen_state["active"]:
+                return False
+            try:
+                ctrl.start_live_listen(_on_listen_update, prefer=_prefer_mode())
+            except Exception as exc:  # noqa: BLE001
+                _set_listening_ui(False)
+                _error(window, "Could not restart key listen", str(exc))
+            return False
+
+        GLib.timeout_add(400, restart)
+
+    def _on_daemon_toggled(_switch: Any, _pspec: Any = None) -> None:
+        if listen_state["suppress_daemon"] or listen_state["daemon_busy"]:
+            _sync_daemon_row()
+            return
+        want_on = daemon_switch.get_active()
+        _sync_daemon_row()
+        listen_state["daemon_busy"] = True
+        daemon_switch.set_sensitive(False)
+        live_status.set_subtitle(
+            "Starting remap daemon…" if want_on else "Stopping remap daemon…"
+        )
 
         def work() -> Any:
+            if want_on:
+                return daemon_ctrl.start_daemon()
             return daemon_ctrl.stop_daemon()
 
         def done(result: Any, error: BaseException | None) -> None:
+            listen_state["daemon_busy"] = False
+            daemon_switch.set_sensitive(True)
             if error:
-                _error(window, "Could not pause daemon", str(error))
+                _sync_daemon_row(from_status=True)
+                _error(window, "Daemon toggle failed", str(error))
                 return
-            if result is not None and getattr(result, "running", False):
+            running = bool(getattr(result, "running", want_on))
+            listen_state["suppress_daemon"] = True
+            try:
+                daemon_switch.set_active(running)
+            finally:
+                listen_state["suppress_daemon"] = False
+            _sync_daemon_row()
+            detail = getattr(result, "detail", "") or ""
+            if running != want_on:
                 _error(
                     window,
-                    "Could not pause daemon",
-                    getattr(result, "detail", "still running"),
+                    "Daemon toggle failed",
+                    detail or ("still running" if running else "not running"),
                 )
-                return
-            listen_state["paused_daemon"] = True
-            _begin_listen()
+            else:
+                _toast(
+                    window,
+                    f"Daemon {'started' if running else 'stopped'}"
+                    + (f" ({detail})" if detail else ""),
+                )
+            if listen_state["active"]:
+                _restart_listen_if_active()
+            elif not listen_state["active"]:
+                live_status.set_subtitle("Idle")
 
         run_in_thread(work, done)
 
     def _start_listen(_b: Any = None) -> None:
-        # Page focus normally pauses the daemon already; stop residual if needed.
-        _ensure_daemon_paused_then_listen()
+        _begin_listen()
 
     def _stop_listen(_b: Any = None) -> None:
-        # Stay on Diagnose → keep daemon paused until the page loses focus.
-        _finish_listen(restart_daemon=False)
+        _finish_listen()
 
     def _reload_profile(_b: Any = None) -> None:
         try:
@@ -1188,6 +1206,8 @@ def build_diagnose_page(window: Any) -> Any:
         except Exception as exc:  # noqa: BLE001
             _error(window, "Could not reload profile", str(exc))
 
+    _sync_daemon_row(from_status=True)
+    live.add(daemon_row)
     live.add(live_status)
     for title, btn in (
         ("Start listening", start_btn),
@@ -1197,11 +1217,11 @@ def build_diagnose_page(window: Any) -> Any:
         row = Adw.ActionRow(title=title)
         row.add_suffix(btn)
         live.add(row)
+    daemon_switch.connect("notify::active", _on_daemon_toggled)
     start_btn.connect("clicked", _start_listen)
     stop_btn.connect("clicked", _stop_listen)
     reload_btn.connect("clicked", _reload_profile)
 
-    # PreferencesPage can't host free widgets easily — wrap page + extras
     page.add(live)
 
     group = Adw.PreferencesGroup(
@@ -1289,7 +1309,6 @@ def build_diagnose_page(window: Any) -> Any:
 
     page.add(group)
 
-    # Host live display widgets below preferences via outer scroll
     outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
     scroll = Gtk.ScrolledWindow()
     scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -1302,19 +1321,14 @@ def build_diagnose_page(window: Any) -> Any:
     outer.append(scroll)
 
     def _on_page_map(_w: Any) -> None:
-        _pause_daemon_for_page()
-
-    def _on_page_unmap(_w: Any) -> None:
-        _resume_daemon_for_page()
+        if not listen_state["daemon_busy"]:
+            _sync_daemon_row(from_status=True)
 
     outer.connect("map", _on_page_map)
-    outer.connect("unmap", _on_page_unmap)
 
-    # Stop listener and restore daemon when window closes
     def _cleanup(*_args: Any) -> None:
-        listen_state["page_focused"] = False
-        if listen_state["active"] or listen_state["paused_daemon"]:
-            _finish_listen(restart_daemon=True)
+        if listen_state["active"]:
+            _finish_listen()
 
     try:
         window.connect("close-request", lambda *_: (_cleanup(), False)[1])

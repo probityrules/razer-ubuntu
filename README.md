@@ -67,7 +67,7 @@ Native **Libadwaita** app (`Adw.Application` + sidebar navigation):
 3. **Profiles** — activate / add profile; **Advanced…** for JSON, duplicate, folder
 4. **Bindings** — layout with Normal + Hypershift per key, live press highlight, draft edits + **Apply all**
 5. **Daemon** — start/stop, **Start at login** autostart, debug toggle, **Fix permissions**
-6. **Diagnose** — live EV_KEY listen (daemon pauses on this page, restarts when you leave), dump/copy/save
+6. **Diagnose** — live key listen (physical EV_KEY or remapped virtual output via daemon toggle), dump/copy/save
 
 The header shows a persistent **daemon LED** (green = running, grey = stopped). Device info refreshes automatically while that page is open.
 

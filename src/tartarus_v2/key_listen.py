@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import select
 import threading
-import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -107,22 +106,73 @@ def format_key_line(line: KeyLine) -> str:
     )
 
 
-def open_tartarus_devices() -> list[Any]:
-    """Open Tartarus evdev nodes (no grab). Raises RuntimeError if none / no evdev."""
+def open_listen_devices(*, prefer: str | None = None) -> tuple[list[Any], str]:
+    """Open Tartarus input nodes for listen / highlight (no grab).
+
+    prefer:
+      - ``"physical"`` — keypad EV_KEY only
+      - ``"virtual"`` — remapper uinput output only
+      - ``None`` — follow daemon status (running → virtual, else physical),
+        falling back to whichever device exists
+    """
     try:
         import evdev
     except ImportError as exc:
         raise RuntimeError("evdev is not installed") from exc
 
-    devices: list[Any] = []
+    if prefer is None:
+        try:
+            from tartarus_v2 import daemon_control
+
+            prefer = "virtual" if daemon_control.status().running else "physical"
+        except Exception:  # noqa: BLE001
+            prefer = "auto"
+    if prefer not in ("physical", "virtual", "auto"):
+        prefer = "auto"
+
+    physical: list[Any] = []
+    virtual: list[Any] = []
     for path in evdev.list_devices():
         try:
             d = evdev.InputDevice(path)
         except OSError:
             continue
-        if "tartarus" in (d.name or "").lower():
-            devices.append(d)
-    if not devices:
+        name = d.name or ""
+        lower = name.lower()
+        if name == "Tartarus V2 Virtual Keyboard":
+            virtual.append(d)
+        elif "tartarus" in lower and "virtual" not in lower:
+            physical.append(d)
+
+    if prefer == "physical":
+        if physical:
+            return physical, "physical"
+        raise RuntimeError(
+            "No physical Tartarus EV_KEY devices. Is the keypad plugged in? "
+            "If the remap daemon is running, turn it off to read raw EV_KEY."
+        )
+    if prefer == "virtual":
+        if virtual:
+            return virtual, "virtual"
+        raise RuntimeError(
+            "No Tartarus virtual keyboard. Start the remap daemon to listen "
+            "to remapped output."
+        )
+
+    if physical:
+        return physical, "physical"
+    if virtual:
+        return virtual, "virtual"
+    raise RuntimeError(
+        "No Tartarus input devices found. Plug in the keypad, or start the "
+        "remap daemon to expose the virtual keyboard."
+    )
+
+
+def open_tartarus_devices() -> list[Any]:
+    """Open physical Tartarus evdev nodes (no grab). Raises if none / no evdev."""
+    devices, mode = open_listen_devices(prefer="physical")
+    if mode != "physical":
         raise RuntimeError(
             "No Tartarus evdev devices found. Is the keypad plugged in? "
             "If the daemon is running it may have exclusive grab — stop it and retry."
@@ -130,8 +180,38 @@ def open_tartarus_devices() -> list[Any]:
     return devices
 
 
+def describe_virtual_press(
+    code: int,
+    *,
+    pressed: bool,
+    profile: dict[str, Any],
+    hypershift_held: bool,
+    ecodes: Any | None = None,
+) -> KeyLine:
+    """Describe a remapped virtual-keyboard EV_KEY (daemon on)."""
+    logicals = logicals_for_output_code(profile, code, hypershift=hypershift_held)
+    logical = ",".join(logicals) if logicals else "?"
+    layer = "hypershift" if hypershift_held else "standard"
+    if logicals:
+        mapping = "(virtual keyboard output)"
+    else:
+        mapping = "(unmatched output — no profile binding emits this key)"
+    return KeyLine(
+        code=code,
+        ev_name=ev_key_name(code, ecodes),
+        logical=logical,
+        layer=layer,
+        mapping=mapping,
+        pressed=pressed,
+    )
+
+
 class LiveKeyMonitor:
-    """Background evdev listener that reports pressed keys + profile mappings."""
+    """Background evdev listener that reports pressed keys + profile mappings.
+
+    Same device selection as KeyHighlightMonitor: physical EV_KEY when the
+    daemon is off, virtual keyboard output when it is on.
+    """
 
     def __init__(self, on_update: UpdateFn, *, history: int = 40) -> None:
         self._on_update = on_update
@@ -144,30 +224,32 @@ class LiveKeyMonitor:
         self._hypershift = False
         self._profile: dict[str, Any] = {}
         self._ecodes: Any | None = None
+        self._mode = "idle"
+        self._prefer: str | None = None
 
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
-    def start(self) -> None:
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    def start(self, *, prefer: str | None = None) -> None:
         if self.running:
             return
+        self._prefer = prefer
         self._stop.clear()
         self._pressed.clear()
         self._log.clear()
         self._hypershift = False
+        self._mode = "idle"
         self._profile = load_profile(get_active_profile_name())
-        self._devices = open_tartarus_devices()
         from evdev import ecodes
 
         self._ecodes = ecodes
         self._thread = threading.Thread(target=self._run, name="tartarus-key-listen", daemon=True)
         self._thread.start()
-        self._emit_status(
-            "Listening on "
-            + ", ".join(f"{d.path} ({d.name})" for d in self._devices)
-            + f" — profile={self._profile.get('name')}"
-        )
 
     def stop(self) -> None:
         self._stop.set()
@@ -182,21 +264,30 @@ class LiveKeyMonitor:
                 pass
         self._devices = []
         self._pressed.clear()
+        self._mode = "stopped"
         self._emit_status("Stopped")
 
     def reload_profile(self) -> None:
         try:
             self._profile = load_profile(get_active_profile_name())
-            # Refresh mapping text for currently held keys
             refreshed: dict[int, KeyLine] = {}
             for code, line in self._pressed.items():
-                refreshed[code] = describe_press(
-                    code,
-                    pressed=True,
-                    profile=self._profile,
-                    hypershift_held=self._hypershift,
-                    ecodes=self._ecodes,
-                )
+                if self._mode == "virtual":
+                    refreshed[code] = describe_virtual_press(
+                        code,
+                        pressed=True,
+                        profile=self._profile,
+                        hypershift_held=self._hypershift,
+                        ecodes=self._ecodes,
+                    )
+                else:
+                    refreshed[code] = describe_press(
+                        code,
+                        pressed=True,
+                        profile=self._profile,
+                        hypershift_held=self._hypershift,
+                        ecodes=self._ecodes,
+                    )
             self._pressed = refreshed
             self._emit_status(f"Profile reloaded: {self._profile.get('name')}")
         except Exception as exc:  # noqa: BLE001
@@ -213,6 +304,7 @@ class LiveKeyMonitor:
             "log": list(self._log),
             "hypershift": self._hypershift,
             "profile": self._profile.get("name"),
+            "mode": self._mode,
             "running": self.running or not self._stop.is_set(),
         }
         try:
@@ -221,6 +313,23 @@ class LiveKeyMonitor:
             log.debug("on_update failed: %s", exc)
 
     def _run(self) -> None:
+        try:
+            self._devices, self._mode = open_listen_devices(prefer=self._prefer)
+        except Exception as exc:  # noqa: BLE001
+            self._mode = "unavailable"
+            self._publish(status=f"Unavailable: {exc}")
+            return
+
+        source = (
+            "physical EV_KEY"
+            if self._mode == "physical"
+            else "virtual keyboard (remapped output)"
+        )
+        self._emit_status(
+            f"Listening ({source}) on "
+            + ", ".join(f"{d.path} ({d.name})" for d in self._devices)
+            + f" — profile={self._profile.get('name')}"
+        )
         fds = {d.fd: d for d in self._devices}
         try:
             while not self._stop.is_set():
@@ -235,6 +344,7 @@ class LiveKeyMonitor:
                     for event in events:
                         self._handle_event(event)
         finally:
+            self._mode = "stopped"
             self._publish(status="Stopped")
 
     def _handle_event(self, event: Any) -> None:
@@ -246,18 +356,31 @@ class LiveKeyMonitor:
                 return
             pressed = event.value == 1
             code = int(event.code)
-            logical = CODE_TO_LOGICAL.get(code)
-            hs_key = self._profile.get("hypershift_key") or "mode"
-            if logical == hs_key:
-                self._hypershift = pressed
 
-            line = describe_press(
-                code,
-                pressed=pressed,
-                profile=self._profile,
-                hypershift_held=self._hypershift,
-                ecodes=ecodes,
-            )
+            if self._mode == "virtual":
+                hs_code = LOGICAL_TO_CODE.get(self._profile.get("hypershift_key") or "mode")
+                if hs_code is not None and code == hs_code:
+                    self._hypershift = pressed
+                line = describe_virtual_press(
+                    code,
+                    pressed=pressed,
+                    profile=self._profile,
+                    hypershift_held=self._hypershift,
+                    ecodes=ecodes,
+                )
+            else:
+                logical = CODE_TO_LOGICAL.get(code)
+                hs_key = self._profile.get("hypershift_key") or "mode"
+                if logical == hs_key:
+                    self._hypershift = pressed
+                line = describe_press(
+                    code,
+                    pressed=pressed,
+                    profile=self._profile,
+                    hypershift_held=self._hypershift,
+                    ecodes=ecodes,
+                )
+
             text = format_key_line(line)
             self._log.appendleft(text)
             if pressed:
@@ -267,6 +390,8 @@ class LiveKeyMonitor:
             self._publish()
             return
 
+        if self._mode != "physical":
+            return
         if event.type == ecodes.EV_REL and event.code == ecodes.REL_WHEEL:
             logical = "scroll_up" if event.value > 0 else "scroll_down" if event.value < 0 else None
             if not logical:
@@ -365,6 +490,7 @@ class KeyHighlightMonitor:
         self._mode = "idle"
         self._hypershift = False
         self._ecodes: Any | None = None
+        self._prefer: str | None = None
 
     @property
     def running(self) -> bool:
@@ -373,9 +499,10 @@ class KeyHighlightMonitor:
     def set_profile(self, profile: dict[str, Any]) -> None:
         self._profile = dict(profile or {})
 
-    def start(self) -> None:
+    def start(self, *, prefer: str | None = None) -> None:
         if self.running:
             return
+        self._prefer = prefer
         self._stop.clear()
         self._pressed.clear()
         self._hypershift = False
@@ -412,44 +539,12 @@ class KeyHighlightMonitor:
         except Exception as exc:  # noqa: BLE001
             log.debug("highlight on_update failed: %s", exc)
 
-    def _open_devices(self) -> tuple[list[Any], str]:
-        try:
-            import evdev
-            from evdev import ecodes
-        except ImportError as exc:
-            raise RuntimeError("evdev is not installed") from exc
-        self._ecodes = ecodes
-
-        # Prefer physical Tartarus nodes (daemon must be off / not grabbing).
-        physical: list[Any] = []
-        for path in evdev.list_devices():
-            try:
-                d = evdev.InputDevice(path)
-            except OSError:
-                continue
-            name = (d.name or "").lower()
-            if "tartarus" in name and "virtual" not in name:
-                physical.append(d)
-        if physical:
-            return physical, "physical"
-
-        # Daemon running: watch the remapper's uinput device.
-        virtual: list[Any] = []
-        for path in evdev.list_devices():
-            try:
-                d = evdev.InputDevice(path)
-            except OSError:
-                continue
-            if (d.name or "") == "Tartarus V2 Virtual Keyboard":
-                virtual.append(d)
-        if virtual:
-            return virtual, "virtual"
-
-        raise RuntimeError("No Tartarus input devices available for highlight")
-
     def _run(self) -> None:
         try:
-            self._devices, mode = self._open_devices()
+            from evdev import ecodes
+
+            self._ecodes = ecodes
+            self._devices, mode = open_listen_devices(prefer=self._prefer)
         except Exception as exc:  # noqa: BLE001
             self._publish(f"unavailable: {exc}")
             return

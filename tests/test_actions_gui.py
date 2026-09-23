@@ -138,8 +138,8 @@ def test_diagnose_live_listen_controller() -> None:
     class FakeMon:
         running = True
 
-        def start(self) -> None:
-            return None
+        def start(self, *, prefer: str | None = None) -> None:
+            updates.append({"prefer": prefer})
 
         def stop(self) -> None:
             self.running = False
@@ -148,12 +148,13 @@ def test_diagnose_live_listen_controller() -> None:
             updates.append({"reload": True})
 
     with patch("tartarus_v2.key_listen.LiveKeyMonitor", return_value=FakeMon()):
-        ctrl.start_live_listen(lambda p: updates.append(p))
+        ctrl.start_live_listen(lambda p: updates.append(p), prefer="physical")
         assert ctrl.live_listen_running()
         ctrl.reload_live_listen_profile()
         ctrl.stop_live_listen()
     assert not ctrl.live_listen_running()
-    assert updates and updates[0].get("reload")
+    assert updates and updates[0].get("prefer") == "physical"
+    assert any(u.get("reload") for u in updates)
 
 
 def test_actions_run_diagnose(tmp_path: Path) -> None:
