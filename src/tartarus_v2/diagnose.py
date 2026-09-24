@@ -236,6 +236,12 @@ def _permissions() -> str:
         st.detail,
         "udev rules:",
     ]
+    try:
+        from tartarus_v2.autostart import describe_autostart
+
+        lines.append("autostart: " + describe_autostart())
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"autostart: (error: {exc})")
     for pattern in (
         "/etc/udev/rules.d/*tartarus*",
         "/etc/udev/rules.d/*razer*",

@@ -104,9 +104,13 @@ def test_autostart_toggle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert not autostart.is_autostart_enabled()
     path = autostart.set_autostart_enabled(True)
     assert path.exists()
+    assert "X-GNOME-Autostart-Delay=3" in path.read_text(encoding="utf-8")
     assert autostart.is_autostart_enabled()
+    summary = autostart.describe_autostart()
+    assert "xdg_enabled=True" in summary
     autostart.set_autostart_enabled(False)
     assert not autostart.is_autostart_enabled()
+    assert "user_desktop_hidden=True" in autostart.describe_autostart()
     assert DaemonController().is_autostart_enabled() is False
 
 

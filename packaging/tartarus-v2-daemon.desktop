@@ -2,8 +2,9 @@
 Type=Application
 Name=Tartarus V2 Daemon
 Comment=Start Tartarus V2 lighting and remapper on login
-Exec=tartarus-v2 daemon --background
+Exec=sh -c 'if systemctl --user is-enabled --quiet tartarus-v2.service 2>/dev/null; then exit 0; fi; exec tartarus-v2 daemon --background'
 Icon=input-keyboard
 Terminal=false
 X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=3
 NoDisplay=false

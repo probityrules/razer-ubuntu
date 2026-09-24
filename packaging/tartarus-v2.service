@@ -1,0 +1,18 @@
+[Unit]
+Description=Tartarus V2 remap and lighting daemon
+Documentation=https://github.com/probityrules/razer-ubuntu
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/tartarus-v2 daemon
+Restart=on-failure
+RestartSec=3
+# The daemon already waits for the keypad to enumerate. A few restarts cover
+# a late plug-in; then stop so an unplugged device does not loop forever.
+StartLimitIntervalSec=180
+StartLimitBurst=6
+
+[Install]
+WantedBy=graphical-session.target
