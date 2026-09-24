@@ -4,36 +4,36 @@ from __future__ import annotations
 
 from typing import Any
 
-# Logical name -> default Linux keycode emitted by the firmware/HID stack.
-# Derived from OpenRazer TARTARUS_EVENT_MAPPING (inverted) plus scroll extras.
+# Logical name -> Linux EV_KEY code emitted by the firmware/HID stack.
+# Calibrated from live `evtest` on Tartarus V2 (physical keypad → code).
 LOGICAL_TO_CODE: dict[str, int] = {
-    "key_01": 15,   # KEY_TAB
-    "key_02": 16,   # KEY_Q
-    "key_03": 17,   # KEY_W
-    "key_04": 18,   # KEY_E
-    "key_05": 19,   # KEY_R
-    "key_06": 58,   # KEY_CAPSLOCK
-    "key_07": 30,   # KEY_A
-    "key_08": 31,   # KEY_S
-    "key_09": 32,   # KEY_D
-    "key_10": 33,   # KEY_F
-    "key_11": 42,   # KEY_LEFTSHIFT
-    "key_12": 44,   # KEY_Z
-    "key_13": 45,   # KEY_X
-    "key_14": 46,   # KEY_C
-    "key_15": 47,   # KEY_V
+    "key_01": 2,    # KEY_1
+    "key_02": 3,    # KEY_2
+    "key_03": 4,    # KEY_3
+    "key_04": 5,    # KEY_4
+    "key_05": 6,    # KEY_5
+    "key_06": 15,   # KEY_TAB
+    "key_07": 16,   # KEY_Q
+    "key_08": 17,   # KEY_W
+    "key_09": 18,   # KEY_E
+    "key_10": 19,   # KEY_R
+    "key_11": 58,   # KEY_CAPSLOCK
+    "key_12": 30,   # KEY_A
+    "key_13": 31,   # KEY_S
+    "key_14": 32,   # KEY_D
+    "key_15": 33,   # KEY_F
     # Bottom keypad row is Synapse 16–19 only. Key 20 is the thumb key
     # (hyperesponse / spacebar), not a fifth key on that row.
-    "key_16": 29,   # KEY_LEFTCTRL
-    "key_17": 125,  # KEY_LEFTMETA (Super)
-    "key_18": 100,  # KEY_RIGHTALT
-    "key_19": 127,  # KEY_COMPOSE
+    "key_16": 42,   # KEY_LEFTSHIFT
+    "key_17": 44,   # KEY_Z
+    "key_18": 45,   # KEY_X
+    "key_19": 46,   # KEY_C
     "key_20": 57,   # KEY_SPACE — Synapse key 20 / hyperesponse thumb
     "mode": 56,     # KEY_LEFTALT / MODE_SWITCH
-    "stick_up": 103,
-    "stick_left": 105,
-    "stick_right": 106,
-    "stick_down": 108,
+    "stick_up": 103,     # KEY_UP
+    "stick_left": 105,   # KEY_LEFT
+    "stick_right": 106,  # KEY_RIGHT
+    "stick_down": 108,   # KEY_DOWN
 }
 
 CODE_TO_LOGICAL: dict[int, str] = {v: k for k, v in LOGICAL_TO_CODE.items()}

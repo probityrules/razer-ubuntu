@@ -157,13 +157,27 @@ def _safe_asset_url(url: str) -> bool:
 
 
 def install_update(info: UpdateCheck, timeout: float = 60.0) -> str:
-    """Download the release .deb and install it with pkexec/apt (admin once)."""
+    """Download the release .deb and install it with pkexec/apt (admin once).
+
+    Stops the remap daemon before installing and restarts it afterward when it
+    was running, so upgrades pick up new remapper code without a manual cycle.
+    """
     if not info.update_available:
         return info.detail or "Already up to date."
     if not info.asset_url or not info.latest:
         return info.detail or "No downloadable update."
     if not _safe_asset_url(info.asset_url):
         return f"Refusing to download unexpected URL: {info.asset_url}"
+
+    from tartarus_v2 import daemon_control
+
+    was_running = False
+    try:
+        was_running = bool(daemon_control.status().running)
+        if was_running:
+            daemon_control.stop()
+    except Exception:  # noqa: BLE001
+        was_running = False
 
     name = info.asset_name or f"tartarus-v2_{info.latest}_all.deb"
     dest = cache_dir() / name
@@ -172,10 +186,20 @@ def install_update(info: UpdateCheck, timeout: float = 60.0) -> str:
         with urllib.request.urlopen(req, timeout=timeout) as resp, dest.open("wb") as fh:
             shutil.copyfileobj(resp, fh)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        if was_running:
+            try:
+                daemon_control.start()
+            except Exception:  # noqa: BLE001
+                pass
         return f"Update failed: could not download {info.asset_url}: {exc}"
 
     apt = shutil.which("apt-get") or shutil.which("apt")
     if not apt:
+        if was_running:
+            try:
+                daemon_control.start()
+            except Exception:  # noqa: BLE001
+                pass
         return (
             f"Downloaded {dest} but apt-get was not found. "
             f"Install it with: sudo apt install {dest}"
@@ -191,6 +215,11 @@ def install_update(info: UpdateCheck, timeout: float = 60.0) -> str:
     elif sudo:
         cmd = [sudo, *cmd]
     else:
+        if was_running:
+            try:
+                daemon_control.start()
+            except Exception:  # noqa: BLE001
+                pass
         return (
             f"Downloaded {dest}. pkexec/sudo not found. "
             f"Install with: sudo apt install {dest}   then restart Tartarus V2."
@@ -205,14 +234,42 @@ def install_update(info: UpdateCheck, timeout: float = 60.0) -> str:
             check=False,
         )
     except Exception as exc:  # noqa: BLE001
+        if was_running:
+            try:
+                daemon_control.start()
+            except Exception:  # noqa: BLE001
+                pass
         return f"Update failed: {exc}"
 
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "").strip()
+        if was_running:
+            try:
+                daemon_control.start()
+            except Exception:  # noqa: BLE001
+                pass
         return f"Update failed (code {proc.returncode}): {err[:500]}"
+
+    daemon_note = "Remap daemon was not running."
+    if was_running:
+        try:
+            st = daemon_control.start()
+            if st.running:
+                daemon_note = "Remap daemon restarted with the new package."
+            else:
+                daemon_note = (
+                    f"Remap daemon was stopped for the upgrade but did not restart "
+                    f"({st.detail}). Start it from the Daemon page."
+                )
+        except Exception as exc:  # noqa: BLE001
+            daemon_note = (
+                f"Remap daemon was stopped for the upgrade but restart failed ({exc}). "
+                "Start it from the Daemon page."
+            )
+
     return (
-        f"Installed tartarus-v2 {info.latest}. "
-        "Quit and reopen Tartarus V2 to use the new version."
+        f"Installed tartarus-v2 {info.latest}. {daemon_note} "
+        "If you updated from the GUI it will reopen; otherwise reopen Tartarus V2."
     )
 
 
