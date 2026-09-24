@@ -7,9 +7,12 @@ import errno
 from tartarus_v2.input.remapper import (
     Remapper,
     grab_error_is_fatal,
+    input_index_from_phys,
     is_tartarus_event_node,
+    mirror_duplicate,
     uinput_failure_message,
     virtual_keyboard_keycodes,
+    waiting_for_second_keyboard,
 )
 
 
@@ -52,6 +55,13 @@ def test_virtual_keyboard_excludes_joystick_buttons() -> None:
     assert 0x130 not in codes
     assert 0x100 not in codes
     assert 0x160 in codes  # KEY_OK, past the button gap
+    # BTN_DPAD_* and BTN_TRIGGER_HAPPY* are joystick buttons past KEY_OK.
+    assert 0x220 not in codes
+    assert 0x223 not in codes
+    assert 0x2C0 not in codes
+    assert 0x2E7 not in codes
+    assert 0x21F in codes  # last key before BTN_DPAD_UP
+    assert 0x230 in codes  # KEY_ALS_TOGGLE, after the d-pad gap
 
 
 def test_unmapped_key_is_passed_through() -> None:
@@ -85,6 +95,64 @@ def test_unmapped_key_is_passed_through() -> None:
         sys.modules.pop("evdev.ecodes", None)
 
     assert emitted == [(99, True), (99, False)]
+
+
+def test_input_index_from_phys() -> None:
+    assert input_index_from_phys("usb-0000:0c:00.3-3/input0") == 0
+    assert input_index_from_phys("usb-0000:0c:00.3-3/input1") == 1
+    assert input_index_from_phys("usb-0000:0c:00.3-3/input2") == 2
+    assert input_index_from_phys("py-evdev-uinput") is None
+    assert input_index_from_phys("") is None
+
+
+def test_mirror_duplicate_drops_only_the_echo() -> None:
+    seen: dict[tuple[int, int], tuple[float, int]] = {}
+    assert not mirror_duplicate(seen, source=1, code=2, value=1, now=1.0)
+    assert mirror_duplicate(seen, source=0, code=2, value=1, now=1.01)
+    # Same interface, later press, is a real repeat.
+    assert not mirror_duplicate(seen, source=1, code=2, value=1, now=1.2)
+    # Mouse wheel interface is not part of the keyboard mirror.
+    assert not mirror_duplicate(seen, source=2, code=2, value=1, now=1.21)
+    # Release on the other interface after the window is a real event.
+    assert not mirror_duplicate(seen, source=0, code=2, value=0, now=2.0)
+    assert not mirror_duplicate(seen, source=1, code=2, value=0, now=2.1)
+
+
+def test_wait_until_second_keyboard_appears(monkeypatch) -> None:
+    class Node:
+        def __init__(self, phys: str) -> None:
+            self.phys = phys
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    boot = Node("usb-1/input0")
+    mouse = Node("usb-1/input2")
+    nkro = Node("usb-1/input1")
+    assert waiting_for_second_keyboard([boot, mouse], now=0.0, grace_deadline=2.0)
+    assert not waiting_for_second_keyboard([boot, nkro], now=0.0, grace_deadline=2.0)
+    assert not waiting_for_second_keyboard([boot], now=2.0, grace_deadline=2.0)
+    assert not waiting_for_second_keyboard(["dev"], now=0.0, grace_deadline=2.0)
+
+    remapper = Remapper({})
+    calls = {"n": 0}
+
+    def fake_find() -> list[Node]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return [boot, mouse]
+        return [boot, mouse, nkro]
+
+    monkeypatch.setattr(remapper, "find_devices", fake_find)
+    monkeypatch.setattr("tartarus_v2.input.remapper.time.sleep", lambda _s: None)
+    monkeypatch.setattr(
+        "tartarus_v2.input.remapper.time.monotonic",
+        lambda: 0.0 if calls["n"] < 2 else 0.2,
+    )
+    found = remapper.find_devices_retry(timeout=5)
+    assert nkro in found
+    assert boot.closed  # first batch is closed while waiting for input1
 
 
 def test_find_devices_retry_returns_when_keypad_appears(monkeypatch) -> None:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
+from pathlib import Path
 from typing import Any
 
 from tartarus_v2 import constants as C
@@ -12,29 +14,93 @@ from tartarus_v2.logging_util import annotate_report
 
 log = logging.getLogger("tartarus_v2.hid")
 
-# Interface 0 is the boot keyboard and interface 2 is the mouse. The remap
-# daemon reads those evdev nodes (interface 1 is held for chroma). Detaching
-# either input interface deletes the node mid-read; the remapper then dies
-# with ENODEV and text editors receive no keys, including firmware defaults.
+# Interfaces 0 and 1 are both HID keyboards (boot + NKRO). Interface 2 is the
+# mouse (scroll wheel). OpenRazer keeps hid-generic bound on the keyboard
+# interfaces and sends chroma as a feature report on interface 1. Detaching
+# interface 1 deletes if01-event-kbd, so the remap daemon never sees those
+# keypresses and text editors plus the diagnostic listener stay silent.
 KEYBOARD_INTERFACE = 0
+NKRO_KEYBOARD_INTERFACE = 1
 MOUSE_INTERFACE = 2
-INPUT_INTERFACES = (KEYBOARD_INTERFACE, MOUSE_INTERFACE)
+INPUT_INTERFACES = (KEYBOARD_INTERFACE, NKRO_KEYBOARD_INTERFACE, MOUSE_INTERFACE)
+
+# linux/hidraw.h: _IOC(_IOC_WRITE|_IOC_READ, 'H', nr, len)
+_HIDIOCSFEATURE_NR = 0x06
+_HIDIOCGFEATURE_NR = 0x07
 
 
 class DeviceError(RuntimeError):
     pass
 
 
+def hid_feature_ioctl(nr: int, length: int) -> int:
+    """Encode a hidraw feature-report ioctl for a buffer of ``length`` bytes."""
+    return (3 << 30) | (length << 16) | (ord("H") << 8) | (nr & 0xFF)
+
+
+def hidraw_matches(uevent: str, *, vendor: int, product: int, interface: int) -> bool:
+    """True when a hidraw uevent is this keypad's ``interface`` (``.../inputN``)."""
+    text = uevent.upper()
+    if f"{vendor:08X}" not in text or f"{product:08X}" not in text:
+        return False
+    phys = ""
+    for line in uevent.splitlines():
+        if line.startswith("HID_PHYS="):
+            phys = line.split("=", 1)[1].strip()
+            break
+    return phys.endswith(f"/input{interface}")
+
+
+def find_tartarus_hidraw(interface: int, *, root: Path | None = None) -> str | None:
+    """Return ``/dev/hidrawN`` for a Tartarus interface, or None."""
+    base = root if root is not None else Path("/sys/class/hidraw")
+    if not base.is_dir():
+        return None
+    for node in sorted(base.iterdir()):
+        uevent_path = node / "device" / "uevent"
+        try:
+            uevent = uevent_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if hidraw_matches(
+            uevent, vendor=C.USB_VID, product=C.USB_PID, interface=interface
+        ):
+            return f"/dev/{node.name}"
+    return None
+
+
+def pack_feature_report(payload: bytes) -> bytearray:
+    """Prefix report id 0. The kernel strips it and sends ``payload`` as-is."""
+    buf = bytearray(1 + len(payload))
+    buf[0] = 0
+    buf[1:] = payload
+    return buf
+
+
+def unpack_feature_report(buf: bytes | bytearray, size: int = C.REPORT_LEN) -> bytes:
+    """Feature GET for report id 0 places the device bytes after the id."""
+    data = bytes(buf[1 : 1 + size])
+    if len(data) < size:
+        data = data + bytes(size - len(data))
+    return data
+
+
 class TartarusDevice:
-    """Low-level USB control-transfer transport (OpenRazer-compatible framing)."""
+    """Chroma transport that leaves every key-emitting HID interface bound."""
 
     def __init__(self, debug: bool = False) -> None:
         self.debug = debug
         self._usb: Any = None
+        self._fd: int | None = None
+        self._hidraw_path: str | None = None
         self._claimed_iface: int | None = None
         self._detached_ifaces: list[int] = []
 
     def open(self) -> None:
+        self._rebind_inputs()
+        self._open_hidraw()
+
+    def _import_usb(self) -> tuple[Any, Any]:
         try:
             import usb.core
             import usb.util
@@ -42,49 +108,63 @@ class TartarusDevice:
             raise DeviceError(
                 "pyusb is required. Install with: pip install pyusb"
             ) from exc
+        return usb.core, usb.util
 
-        dev = usb.core.find(idVendor=C.USB_VID, idProduct=C.USB_PID)
+    def _rebind_inputs(self) -> None:
+        """Put hid-generic back on any keyboard/mouse interface a prior open unbound."""
+        usb_core, usb_util = self._import_usb()
+        dev = usb_core.find(idVendor=C.USB_VID, idProduct=C.USB_PID)
         if dev is None:
             raise DeviceError(
                 f"Device {C.USB_VID:04x}:{C.USB_PID:04x} not found. "
                 "Is the Tartarus V2 plugged in?"
             )
-
-        # Heal a keypad left unbound by an earlier alternate-interface claim.
-        self._restore_unbound_inputs(dev)
-
-        iface = C.REPORT_INDEX
-        self._detach_kernel(dev, iface)
         try:
-            usb.util.claim_interface(dev, iface)
-        except usb.core.USBError as exc:
-            # Do not fall back onto interface 0 or 2. Those still have hid-generic
-            # bound so the desktop can see key and mouse events. Claiming them
-            # requires detaching that driver, which is what kills the remapper
-            # when the GUI or diagnose probe opens the device while the daemon
-            # already owns interface 1.
-            self._reattach_detached(dev)
+            self._restore_unbound_inputs(dev)
+        finally:
             try:
-                usb.util.dispose_resources(dev)
+                usb_util.dispose_resources(dev)
             except Exception:  # noqa: BLE001
                 pass
-            raise DeviceError(
-                f"Could not claim USB interface {iface} ({exc}). "
-                "If the remap daemon is running it already owns this interface. "
-                "Refusing to detach the keyboard or mouse interface, because that "
-                "stops every key — including firmware defaults — from reaching "
-                "text editors."
-            ) from exc
 
-        self._claimed_iface = iface
-        self._usb = dev
+    def _open_hidraw(self) -> None:
+        path = self._wait_hidraw(C.REPORT_INDEX)
+        try:
+            fd = os.open(path, os.O_RDWR | getattr(os, "O_CLOEXEC", 0))
+        except OSError as exc:
+            raise DeviceError(
+                f"Could not open {path} for chroma ({exc}). "
+                "The kernel keyboard driver stays bound so keypresses are not "
+                "lost. plugdev (or the tartarus udev rule) must be able to "
+                "write that hidraw node."
+            ) from exc
+        self._fd = fd
+        self._hidraw_path = path
+        self._claimed_iface = C.REPORT_INDEX
         log.info(
-            "Opened %s (%04x:%04x) on interface %s",
+            "Opened %s (%04x:%04x) via %s on interface %s "
+            "(kernel driver left bound so keypad keys still arrive)",
             C.DEVICE_NAME,
             C.USB_VID,
             C.USB_PID,
+            path,
             self._claimed_iface,
         )
+
+    def _wait_hidraw(self, interface: int, timeout: float = 3.0) -> str:
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            path = find_tartarus_hidraw(interface)
+            if path:
+                return path
+            if time.monotonic() >= deadline:
+                raise DeviceError(
+                    f"No hidraw node for Tartarus interface {interface}. "
+                    "Chroma uses that node without detaching hid-generic. "
+                    "Unbinding it removes the second keyboard, and then neither "
+                    "a text editor nor the diagnostic listener receives keys."
+                )
+            time.sleep(0.1)
 
     def _kernel_driver_active(self, dev: Any, iface: int) -> bool:
         try:
@@ -94,6 +174,7 @@ class TartarusDevice:
             return False
 
     def _detach_kernel(self, dev: Any, iface: int) -> None:
+        """Never detach a Tartarus interface. Keyboards and the mouse emit input."""
         if iface in INPUT_INTERFACES:
             log.error(
                 "Refusing to detach kernel driver from input interface %s",
@@ -112,7 +193,7 @@ class TartarusDevice:
         log.info("Detached kernel driver from interface %s", iface)
 
     def _restore_unbound_inputs(self, dev: Any) -> None:
-        """Rebind hid-generic on the keyboard and mouse if a prior open left them unbound."""
+        """Rebind hid-generic on every input interface a prior open left unbound."""
         for iface in INPUT_INTERFACES:
             if self._kernel_driver_active(dev, iface):
                 continue
@@ -152,26 +233,16 @@ class TartarusDevice:
                     pass
 
     def close(self) -> None:
-        if self._usb is None:
+        fd = self._fd
+        self._fd = None
+        self._hidraw_path = None
+        self._claimed_iface = None
+        if fd is None:
             return
-        dev = self._usb
         try:
-            import usb.util
-
-            if self._claimed_iface is not None:
-                try:
-                    usb.util.release_interface(dev, self._claimed_iface)
-                except Exception:  # noqa: BLE001
-                    pass
-            self._reattach_detached(dev)
-            # If some other opener unbound the keyboard, put it back now that
-            # we are releasing the device.
-            self._restore_unbound_inputs(dev)
-            usb.util.dispose_resources(dev)
-        finally:
-            self._usb = None
-            self._claimed_iface = None
-            self._detached_ifaces = []
+            os.close(fd)
+        except OSError:
+            pass
 
     def __enter__(self) -> TartarusDevice:
         self.open()
@@ -185,7 +256,7 @@ class TartarusDevice:
         return self._claimed_iface if self._claimed_iface is not None else C.REPORT_INDEX
 
     def send(self, report: protocol.RazerReport) -> protocol.RazerReport:
-        if self._usb is None:
+        if self._fd is None:
             raise DeviceError("Device not open")
 
         if report.transaction_id == 0:
@@ -199,26 +270,9 @@ class TartarusDevice:
                 if self.debug:
                     log.debug("TX attempt %s:\n%s", attempt, annotate_report(request))
 
-                self._usb.ctrl_transfer(
-                    0x21,  # HOST_TO_DEVICE | CLASS | INTERFACE
-                    0x09,  # SET_REPORT
-                    C.REPORT_VALUE,
-                    self.report_index,
-                    request,
-                    timeout=5000,
-                )
+                self._feature_io(request, write=True)
                 time.sleep(C.WAIT_SECONDS)
-
-                response = bytes(
-                    self._usb.ctrl_transfer(
-                        0xA1,  # DEVICE_TO_HOST | CLASS | INTERFACE
-                        0x01,  # GET_REPORT
-                        C.REPORT_VALUE,
-                        self.report_index,
-                        C.REPORT_LEN,
-                        timeout=5000,
-                    )
-                )
+                response = self._feature_io(bytes(C.REPORT_LEN), write=False)
                 if self.debug:
                     log.debug("RX attempt %s:\n%s", attempt, annotate_report(response))
 
@@ -232,9 +286,25 @@ class TartarusDevice:
                         f"class=0x{report.command_class:02x} cmd=0x{report.command_id:02x}"
                     )
                 return parsed
+            except DeviceError:
+                raise
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
                 log.debug("send attempt %s failed: %s", attempt, exc)
                 time.sleep(C.WAIT_SECONDS * attempt)
 
         raise DeviceError(f"USB transfer failed after retries: {last_err}")
+
+    def _feature_io(self, payload: bytes, *, write: bool) -> bytes:
+        import fcntl
+
+        fd = self._fd
+        if fd is None:
+            raise DeviceError("Device not open")
+        if write:
+            buf = pack_feature_report(payload)
+            fcntl.ioctl(fd, hid_feature_ioctl(_HIDIOCSFEATURE_NR, len(buf)), buf, True)
+            return payload
+        buf = pack_feature_report(bytes(C.REPORT_LEN))
+        fcntl.ioctl(fd, hid_feature_ioctl(_HIDIOCGFEATURE_NR, len(buf)), buf, True)
+        return unpack_feature_report(buf)

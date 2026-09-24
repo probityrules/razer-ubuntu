@@ -37,22 +37,101 @@ def grab_error_is_fatal(exc: OSError) -> bool:
     return err not in (errno.ENODEV, errno.ENOENT, errno.ENXIO)
 
 
-# linux/input-event-codes.h. Codes from BTN_MISC (0x100) up to KEY_OK (0x160)
-# are mouse, joystick, and gamepad buttons. udev's input_id tags a device
-# ID_INPUT_JOYSTICK and withholds ID_INPUT_KEY when those bits are set, and
-# libinput then ignores the node. The virtual keyboard shows up in evtest and
-# the physical keypad is grabbed, but text editors receive nothing.
-_BTN_MISC = 0x100
-_KEY_OK = 0x160
+# linux/input-event-codes.h ranges udev's input_id treats as keyboard keys.
+# Anything in the gaps (mouse buttons, BTN_JOYSTICK, BTN_DPAD, BTN_TRIGGER_HAPPY)
+# makes udev tag the node ID_INPUT_JOYSTICK. libinput then ignores it: evtest on
+# the virtual keyboard can show events while text editors receive nothing.
+# Start is inclusive, stop is exclusive — same as udev's high_key_blocks.
+_KEYBOARD_RANGES = (
+    (1, 0x100),  # KEY_ESC .. before BTN_MISC
+    (0x160, 0x220),  # KEY_OK .. before BTN_DPAD_UP
+    (0x230, 0x2C0),  # KEY_ALS_TOGGLE .. before BTN_TRIGGER_HAPPY
+)
 
 
 def virtual_keyboard_keycodes(key_max: int) -> list[int]:
     """EV_KEY codes that keep the uinput node classified as a keyboard."""
     upper = max(0, int(key_max))
-    codes = list(range(1, min(upper, _BTN_MISC)))
-    if upper > _KEY_OK:
-        codes.extend(range(_KEY_OK, upper))
+    codes: list[int] = []
+    for start, stop in _KEYBOARD_RANGES:
+        if upper <= start:
+            continue
+        codes.extend(range(start, min(upper, stop)))
     return codes
+
+
+def input_index_from_phys(phys: str) -> int | None:
+    """USB interface index from an evdev phys path (``.../inputN``)."""
+    tail = (phys or "").rsplit("/", 1)[-1]
+    prefix = "input"
+    if not tail.startswith(prefix):
+        return None
+    number = tail[len(prefix) :]
+    if not number.isdigit():
+        return None
+    return int(number)
+
+
+def mirror_duplicate(
+    seen: dict[tuple[int, int], tuple[float, int]],
+    *,
+    source: int | None,
+    code: int,
+    value: int,
+    now: float,
+    window: float = 0.04,
+) -> bool:
+    """True when the boot keyboard and the NKRO interface echo the same EV_KEY.
+
+    Both interfaces report the keypad. Grabbing both is required so firmware
+    keys do not leak, but forwarding both would type every character twice.
+    """
+    if source not in (0, 1):
+        return False
+    key = (int(code), int(value))
+    prev = seen.get(key)
+    seen[key] = (now, int(source))
+    if prev is None:
+        return False
+    prev_t, prev_src = prev
+    if prev_src == source or prev_src not in (0, 1):
+        return False
+    return (now - prev_t) <= window
+
+
+def _missing_second_keyboard(devices: list[Any]) -> bool:
+    """True when real evdev nodes are present and none of them is input1."""
+    saw_phys = False
+    for dev in devices:
+        phys = getattr(dev, "phys", None)
+        if not isinstance(phys, str):
+            continue
+        saw_phys = True
+        if input_index_from_phys(phys) == 1:
+            return False
+    return saw_phys
+
+
+def waiting_for_second_keyboard(
+    devices: list[Any], *, now: float, grace_deadline: float
+) -> bool:
+    """True while the NKRO keyboard node (input1) may still be appearing.
+
+    Chroma used to unbind that interface. After it is rebound, udev creates
+    ``if01-event-kbd`` a moment later. Returning the boot keyboard alone grabs
+    a node that does not carry the keypad keys.
+    """
+    if now >= grace_deadline or not devices:
+        return False
+    indexes: list[int | None] = []
+    for dev in devices:
+        phys = getattr(dev, "phys", None)
+        if not isinstance(phys, str):
+            return False
+        indexes.append(input_index_from_phys(phys))
+    if 1 in indexes:
+        return False
+    return any(index in (0, 2) for index in indexes)
 
 
 def input_node_lost_message(exc: BaseException) -> str:
@@ -108,6 +187,11 @@ class Remapper:
         self._ecodes: Any = None
         self._running = False
         self._unknown_codes: set[int] = set()
+        self._mirror_seen: dict[tuple[int, int], tuple[float, int]] = {}
+        self._mirror_logged: set[int] = set()
+        self._logged_output = False
+        self._output_codes = set(virtual_keyboard_keycodes(0x2FF))
+        self._dropped_codes: set[int] = set()
 
     def _require_evdev(self) -> Any:
         try:
@@ -198,12 +282,36 @@ class Remapper:
         return found
 
     def find_devices_retry(self, timeout: float = 20.0) -> list[Any]:
-        """Poll for the keypad. Login autostart often runs before udev creates the nodes."""
+        """Poll for the keypad. Login autostart often runs before udev creates the nodes.
+
+        Also wait briefly for interface 1 (``.../input1``). That NKRO keyboard is
+        where the keypad keys are reported; the boot keyboard alone stays silent
+        once interface 1 has been unbound.
+        """
         deadline = time.monotonic() + max(0.0, timeout)
+        grace = time.monotonic() + min(2.0, max(0.0, timeout))
         announced = False
         while True:
             found = self.find_devices()
-            if found or time.monotonic() >= deadline:
+            now = time.monotonic()
+            if waiting_for_second_keyboard(found, now=now, grace_deadline=grace):
+                self._close_found(found)
+                if not announced:
+                    log.info(
+                        "Waiting for the second Tartarus keyboard (input1); "
+                        "that interface carries the keypad keys"
+                    )
+                    announced = True
+                time.sleep(min(0.2, max(0.0, grace - time.monotonic())))
+                continue
+            if found:
+                if _missing_second_keyboard(found) and now >= grace:
+                    log.warning(
+                        "Second keyboard (input1) did not appear; "
+                        "keypad keys on that interface cannot be remapped"
+                    )
+                return found
+            if now >= deadline:
                 return found
             if not announced:
                 log.info(
@@ -212,7 +320,15 @@ class Remapper:
                     int(timeout),
                 )
                 announced = True
-            time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+            time.sleep(min(1.0, max(0.0, deadline - now)))
+
+    @staticmethod
+    def _close_found(devices: list[Any]) -> None:
+        for dev in devices:
+            try:
+                dev.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     @staticmethod
     def _is_physical_tartarus(dev: Any) -> bool:
@@ -322,9 +438,51 @@ class Remapper:
 
         assert self._ui is not None
         value = 1 if pressed else 0
+        allowed = [code for code in codes if code in self._output_codes]
+        for code in codes:
+            if code not in self._output_codes and code not in self._dropped_codes:
+                self._dropped_codes.add(code)
+                log.info(
+                    "Not emitting EV_KEY %s; it is outside the virtual keyboard map",
+                    code,
+                )
+        codes = allowed
+        if not codes:
+            return
+        if not self._logged_output:
+            self._logged_output = True
+            log.info(
+                "Virtual keyboard output active (first EV_KEY %s pressed=%s)",
+                codes[0],
+                pressed,
+            )
         for code in codes:
             self._ui.write(ecodes.EV_KEY, code, value)
         self._ui.syn()
+
+    def _drop_mirrored_key(self, dev: Any, event: Any) -> bool:
+        """Swallow the duplicate report from the other keyboard interface."""
+        from evdev import ecodes
+
+        if event.type != ecodes.EV_KEY or event.value == 2:
+            return False
+        source = input_index_from_phys(getattr(dev, "phys", "") or "")
+        if not mirror_duplicate(
+            self._mirror_seen,
+            source=source,
+            code=int(event.code),
+            value=int(event.value),
+            now=time.monotonic(),
+        ):
+            return False
+        code = int(event.code)
+        if code not in self._mirror_logged:
+            self._mirror_logged.add(code)
+            log.info(
+                "Ignoring mirrored EV_KEY %s from the other keyboard interface",
+                code,
+            )
+        return True
 
     def _logical_from_event(self, event: Any) -> str | None:
         from evdev import ecodes
@@ -467,6 +625,8 @@ class Remapper:
                         )
                         raise RuntimeError(input_node_lost_message(exc)) from exc
                     for event in events:
+                        if self._drop_mirrored_key(dev, event):
+                            continue
                         logical = self._logical_from_event(event)
                         if logical is None:
                             self._passthrough_unmapped(event)

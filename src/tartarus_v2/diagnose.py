@@ -274,13 +274,26 @@ def _permissions() -> str:
     return "\n".join(lines)
 
 
+def latest_daemon_session(text: str) -> str:
+    """Log lines from the most recent ``Starting daemon`` onward.
+
+    The daemon log keeps earlier crashes. A stale ``No such device`` must not
+    describe a later session that grabbed the keypad and then produced no keys.
+    """
+    marker = "Starting daemon"
+    idx = text.rfind(marker)
+    return text[idx:] if idx != -1 else text
+
+
 def daemon_log_findings(text: str) -> list[str]:
     """Turn recent daemon log lines into operator-facing findings.
 
     A successful ``Creating virtual keyboard via /dev/uinput`` line must not be
     reported as a permissions failure. The Diagnose→Daemon crash leaves that
     success line plus ``Claimed alternate interface 0`` and ``No such device``.
+    Only the latest daemon session is considered.
     """
+    text = latest_daemon_session(text)
     findings: list[str] = []
     if "Permission denied" in text and "/dev/input" in text:
         findings.append(
@@ -302,6 +315,22 @@ def daemon_log_findings(text: str) -> list[str]:
             "not a /dev/uinput permission problem. While that interface is unbound, "
             "text editors receive no keys at all, including firmware defaults. "
             "Replug the Tartarus if keys stay dead after the daemon stops."
+        )
+
+    # Interface 1 is the NKRO keyboard. Detaching it removes if01-event-kbd.
+    # The boot keyboard can still be grabbed, so the log looks healthy, but
+    # keypresses never reach the virtual keyboard.
+    if (
+        "Detached kernel driver from interface 1" in text
+        and "Remapper started" in text
+        and not node_lost
+    ):
+        findings.append(
+            "Daemon log: chroma detached USB interface 1, the second Tartarus "
+            "keyboard. That removes if01-event-kbd, so the remap daemon grabs a "
+            "boot keyboard that is not producing the keypad keys. Text editors and "
+            "the diagnostic listener both stay silent even though the virtual "
+            "keyboard was created. Replug the keypad if keys stay dead after updating."
         )
 
     uinput_failed = "Cannot create the virtual keyboard" in text or (
