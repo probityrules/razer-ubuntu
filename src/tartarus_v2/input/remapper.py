@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import errno
 import logging
+import os
 import select
 import time
 from pathlib import Path
@@ -12,6 +14,49 @@ from tartarus_v2.input import keys as keytable
 from tartarus_v2.input.macros import play_macro
 
 log = logging.getLogger("tartarus_v2.remap")
+
+
+def is_tartarus_event_node(name: str) -> bool:
+    """True for physical Tartarus evdev by-id links, including ``*-event-if01``.
+
+    The keypad can emit key events on a node that is not named ``event-kbd``
+    or ``event-mouse``. Leaving that node ungrabbed lets firmware default
+    keys through to text editors while the daemon looks like it is running.
+    """
+    lower = name.lower()
+    if "tartarus" not in lower:
+        return False
+    if "virtual" in lower or "hidraw" in lower:
+        return False
+    return "event" in lower
+
+
+def grab_error_is_fatal(exc: OSError) -> bool:
+    """Stale nodes disappear after chroma detaches a kernel driver; skip those."""
+    err = getattr(exc, "errno", None)
+    return err not in (errno.ENODEV, errno.ENOENT, errno.ENXIO)
+
+
+def uinput_failure_message(exc: OSError) -> str:
+    err = getattr(exc, "errno", None)
+    if err in (errno.EACCES, errno.EPERM):
+        return (
+            "Cannot create the virtual keyboard (/dev/uinput): permission denied. "
+            "The keypad keeps sending its default keys to text editors until this works. "
+            "Root is not required. Run tartarus-v2 fix-permissions, then log out and back in "
+            "so this session can write /dev/uinput (input group or the tartarus udev rule)."
+        )
+    if err in (errno.ENOENT, errno.ENODEV) or not os.path.exists("/dev/uinput"):
+        return (
+            "Cannot create the virtual keyboard because /dev/uinput is missing. "
+            "Load it with: sudo modprobe uinput   or run tartarus-v2 fix-permissions. "
+            "Root is not required to run the remap daemon after that node exists and is writable."
+        )
+    return (
+        f"Failed to create the virtual keyboard (/dev/uinput): {exc}. "
+        "Remapped keys will not reach other apps. Root is not required; "
+        "run tartarus-v2 fix-permissions and log out/in."
+    )
 
 
 class Remapper:
@@ -84,25 +129,38 @@ class Remapper:
         candidates: list[Path] = []
         if by_id.is_dir():
             for p in sorted(by_id.iterdir()):
-                name = p.name.lower()
-                if "tartarus" in name and ("event-kbd" in name or "event-mouse" in name):
+                if is_tartarus_event_node(p.name):
                     candidates.append(p)
-        if not candidates:
-            for path in evdev.list_devices():
-                try:
-                    dev = evdev.InputDevice(path)
-                except OSError:
-                    continue
-                # Never remap our own uinput device — only the physical keypad.
-                if self._is_physical_tartarus(dev):
-                    found.append(dev)
-            return found
 
         for link in candidates:
             try:
-                found.append(evdev.InputDevice(str(link.resolve())))
+                dev = evdev.InputDevice(str(link.resolve()))
             except OSError as exc:
                 log.warning("Could not open %s: %s", link, exc)
+                continue
+            if not self._is_physical_tartarus(dev):
+                try:
+                    dev.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
+            found.append(dev)
+        if found:
+            return found
+
+        for path in evdev.list_devices():
+            try:
+                dev = evdev.InputDevice(path)
+            except OSError:
+                continue
+            # Never remap our own uinput device — only the physical keypad.
+            if self._is_physical_tartarus(dev):
+                found.append(dev)
+            else:
+                try:
+                    dev.close()
+                except Exception:  # noqa: BLE001
+                    pass
         return found
 
     @staticmethod
@@ -127,6 +185,10 @@ class Remapper:
                 "No Tartarus V2 input devices found under /dev/input. "
                 "Check permissions (input group) and that the keypad is plugged in."
             )
+        log.info(
+            "Tartarus event nodes: %s",
+            ", ".join(f"{getattr(d, 'name', '?')} ({getattr(d, 'path', '?')})" for d in devices),
+        )
 
         caps: dict[int, list[int]] = {ecodes.EV_KEY: [], ecodes.EV_REL: []}
         key_set: set[int] = set()
@@ -135,15 +197,30 @@ class Remapper:
         caps[ecodes.EV_KEY] = sorted(key_set)
         caps[ecodes.EV_REL] = [ecodes.REL_WHEEL, ecodes.REL_HWHEEL]
 
-        self._ui = UInput(caps, name="Tartarus V2 Virtual Keyboard", version=0x1)
+        try:
+            log.info("Creating virtual keyboard via /dev/uinput")
+            self._ui = UInput(caps, name="Tartarus V2 Virtual Keyboard", version=0x1)
+        except OSError as exc:
+            for dev in devices:
+                try:
+                    dev.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            raise RuntimeError(uinput_failure_message(exc)) from exc
         self._devices = devices
         grabbed = 0
-        for d in self._devices:
+        kept: list[Any] = []
+        for d in list(self._devices):
             try:
                 d.grab()
-                grabbed += 1
-                log.info("Grabbed %s (%s) — system-wide remap active for this node", d.name, d.path)
             except OSError as exc:
+                if not grab_error_is_fatal(exc):
+                    log.warning("Skipping %s (%s); node went away: %s", d.path, d.name, exc)
+                    try:
+                        d.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    continue
                 log.error("Failed to grab %s: %s", d.path, exc)
                 # Without exclusive grab, stock HID still reaches apps (looks like
                 # "in-game only" remaps). Fail hard so the daemon does not pretend
@@ -153,8 +230,13 @@ class Remapper:
                     f"Could not exclusive-grab {d.path} ({d.name}): {exc}. "
                     "Remapping cannot be system-wide without grab. "
                     "Run: tartarus-v2 fix-permissions  (then log out/in), "
-                    "and ensure no other process has the device open."
+                    "and ensure no other process has the device open. "
+                    "Root is not required."
                 ) from exc
+            grabbed += 1
+            kept.append(d)
+            log.info("Grabbed %s (%s) — system-wide remap active for this node", d.name, d.path)
+        self._devices = kept
 
         if grabbed == 0:
             self.stop()

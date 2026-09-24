@@ -18,6 +18,8 @@ def test_parser_all_top_level_commands() -> None:
         ["daemon", "--background"],
         ["uninstall"],
         ["fix-permissions"],
+        ["update"],
+        ["update", "--install"],
         ["set-effect", "static", "--rgb", "FF0000"],
         ["set-brightness", "200"],
         ["profile", "list"],

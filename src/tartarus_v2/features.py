@@ -28,6 +28,7 @@ FEATURE_MAP: tuple[Feature, ...] = (
     Feature("gui", "launch_gui", "app", "launch"),
     Feature("uninstall", "uninstall_package", "app", "uninstall"),
     Feature("fix-permissions", "fix_permissions", "daemon", "fix_permissions"),
+    Feature("update", "check_for_update", "app", "check_for_update"),
 )
 
 # Extra GUI-only handlers that must exist for full CLI-equivalent coverage

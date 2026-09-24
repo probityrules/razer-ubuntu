@@ -188,6 +188,9 @@ class AppController:
     def uninstall(self) -> str:
         return actions.uninstall_package()
 
+    def check_for_update(self) -> Any:
+        return actions.check_for_update()
+
 
 PAGE_CONTROLLERS: dict[str, type] = {
     "device": DeviceController,

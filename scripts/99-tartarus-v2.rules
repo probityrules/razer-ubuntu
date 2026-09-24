@@ -9,3 +9,7 @@ SUBSYSTEM=="input", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="022b", MODE="066
 
 # USB device node (pyusb)
 SUBSYSTEM=="usb", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="022b", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Virtual keyboard. The remap daemon must create this node or apps keep the
+# firmware default keys. uaccess covers the current login; root is not required.
+KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", GROUP="input", TAG+="uaccess", OPTIONS+="static_node=uinput"

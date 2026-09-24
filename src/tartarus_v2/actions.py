@@ -239,6 +239,18 @@ def fix_permissions() -> str:
     return _fix()
 
 
+def check_for_update() -> Any:
+    from tartarus_v2.updater import check_for_update as _check
+
+    return _check()
+
+
+def install_update(info: Any) -> str:
+    from tartarus_v2.updater import install_update as _install
+
+    return _install(info)
+
+
 def run_diagnose(
     *,
     out: str | None = None,

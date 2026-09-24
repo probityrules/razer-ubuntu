@@ -108,6 +108,14 @@ class Daemon:
         try:
             self._remapper.start()
             self._remapper.run_forever()
+        except Exception as exc:
+            # Background starts discard stderr. Without this line the log only
+            # shows "Daemon stopped" and text editors keep firmware default keys.
+            log.error(
+                "Remapper failed; keypad keys stay at firmware defaults: %s",
+                exc,
+            )
+            raise
         finally:
             self.stop()
 
