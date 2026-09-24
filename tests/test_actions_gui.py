@@ -66,7 +66,7 @@ def test_bindings_hypershift(profile_home: Path) -> None:
     data = ctrl.load_bindings("default")
     assert data["hypershift_key"]
     updated = ctrl.set_hypershift_key("default", "thumb")
-    assert updated["hypershift_key"] == "thumb"
+    assert updated["hypershift_key"] == "key_20"
     saved = ctrl.save_bindings(
         "default",
         "hypershift",

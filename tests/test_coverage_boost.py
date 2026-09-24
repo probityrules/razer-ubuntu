@@ -198,19 +198,50 @@ def test_start_daemon_background() -> None:
 
 
 def test_short_label_keys() -> None:
-    from tartarus_v2.input.keys import KEYMAP_LAYOUT, short_label
+    from tartarus_v2.input.keys import (
+        ALL_LOGICAL_KEYS,
+        KEYMAP_LAYOUT,
+        LOGICAL_TO_CODE,
+        describe_logical,
+        short_label,
+    )
 
     assert short_label("stick_up") == "↑"
     assert short_label("key_01") == "01"
     assert short_label("mode") == "mode"
+    assert short_label("key_20") == "20"
     assert short_label("thumb") == "20"
+    assert describe_logical("key_20") == "key 20 (thumb)"
+    assert describe_logical("thumb") == "key 20 (thumb)"
     assert short_label("custom") == "custom"
     flat = {k for row in KEYMAP_LAYOUT for k in row if k}
     for n in range(1, 20):
         assert f"key_{n:02d}" in flat
-    assert "thumb" in flat
+    assert "key_20" in flat
+    assert "thumb" not in flat
     assert "scroll_up" in flat
     assert "mode" in flat
+    # Bottom keypad row is keys 16–19. Key 20 is the thumb, not a fifth key.
+    assert KEYMAP_LAYOUT[3] == ["key_16", "key_17", "key_18", "key_19"]
+    assert "key_20" not in KEYMAP_LAYOUT[3]
+    assert all(key is not None for key in KEYMAP_LAYOUT[3])
+    assert LOGICAL_TO_CODE["key_20"] == 57
+    assert "thumb" not in LOGICAL_TO_CODE
+    assert "thumb" not in ALL_LOGICAL_KEYS
+    assert "key_20" in ALL_LOGICAL_KEYS
+    assert describe_logical("mode") == "mode"
+
+    from tartarus_v2.input.keys import fold_thumb_alias, lookup_binding
+
+    assert lookup_binding([], "key_20") is None  # type: ignore[arg-type]
+    both = {"key_20": "n", "thumb": "space"}
+    assert lookup_binding(both, "key_20") == "space"
+    assert lookup_binding({"key_01": "a"}, "key_01") == "a"
+    assert lookup_binding({"thumb": "space"}, "missing") is None
+
+    bare = {"hypershift_key": 1, "standard": "nope", "hypershift": {"bindings": []}}
+    fold_thumb_alias(bare)  # type: ignore[arg-type]
+    assert bare["hypershift_key"] == 1
 
 
 def test_remapper_skips_virtual_keyboard_device() -> None:

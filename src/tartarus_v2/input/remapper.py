@@ -295,7 +295,7 @@ class Remapper:
         layer_name = "hypershift" if self._hypershift_held else "standard"
         layer = self.profile.get(layer_name) or {}
         bindings = layer.get("bindings") or {}
-        return bindings.get(logical)
+        return keytable.lookup_binding(bindings, logical)
 
     def _apply_binding(self, binding: Any, pressed: bool) -> None:
         if binding is None:
@@ -333,8 +333,8 @@ class Remapper:
         # for hold-style we need press/release; shorthand taps on press only
 
     def _handle_key(self, logical: str, pressed: bool) -> None:
-        hs_key = self.profile.get("hypershift_key")
-        if logical == hs_key:
+        hs_key = keytable.canonical_logical(str(self.profile.get("hypershift_key") or ""))
+        if keytable.canonical_logical(logical) == hs_key:
             was = self._hypershift_held
             self._hypershift_held = pressed
             if was != pressed:
