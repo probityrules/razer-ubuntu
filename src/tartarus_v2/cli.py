@@ -36,6 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Start detached (for login autostart) and exit",
     )
+    p_daemon.add_argument(
+        "--stop",
+        action="store_true",
+        help="Stop the background remap daemon if it is running",
+    )
 
     sub.add_parser("uninstall", help="Remove the tartarus-v2 package (apt/pkexec)")
     sub.add_parser(
@@ -99,6 +104,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "daemon":
+        if getattr(args, "stop", False):
+            from tartarus_v2 import daemon_control
+
+            st = daemon_control.stop()
+            print(st.detail + (f" pid={st.pid}" if st.pid else ""))
+            return 0
         if getattr(args, "background", False):
             st = actions.start_daemon_background(profile=args.profile, debug=args.debug)
             print(st.detail + (f" pid={st.pid}" if st.pid else ""))

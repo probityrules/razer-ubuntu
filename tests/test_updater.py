@@ -178,12 +178,24 @@ def test_install_refuses_and_succeeds(tmp_path: Path, monkeypatch: pytest.Monkey
         return {"apt-get": "/usr/bin/apt-get", "pkexec": "/usr/bin/pkexec"}.get(name)
 
     proc = MagicMock(returncode=0, stdout="", stderr="")
+    fake_status = MagicMock(running=True, pid=42, detail="running")
+    fake_stopped = MagicMock(running=False, pid=42, detail="stopped")
+    fake_started = MagicMock(running=True, pid=99, detail="started")
     with patch("tartarus_v2.updater.urllib.request.urlopen", return_value=_Body()):
         with patch("tartarus_v2.updater.shutil.which", side_effect=which):
             with patch("tartarus_v2.updater.os_euid_is_root", return_value=False):
                 with patch("tartarus_v2.updater.subprocess.run", return_value=proc) as run:
-                    msg = install_update(good)
+                    with patch("tartarus_v2.daemon_control.status", return_value=fake_status):
+                        with patch("tartarus_v2.daemon_control.stop", return_value=fake_stopped) as stop:
+                            with patch(
+                                "tartarus_v2.daemon_control.start",
+                                return_value=fake_started,
+                            ) as start:
+                                msg = install_update(good)
     assert msg.startswith("Installed")
+    assert "daemon restarted" in msg.lower()
+    stop.assert_called_once()
+    start.assert_called_once()
     assert run.call_args.args[0][0].endswith("pkexec")
     deb = tmp_path / "tartarus-v2" / "tartarus-v2_0.8.0_all.deb"
     assert deb.is_file()
@@ -205,11 +217,13 @@ def test_install_failure_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         detail="update",
     )
     with patch("tartarus_v2.updater.urllib.request.urlopen", side_effect=URLError("nope")):
-        assert "could not download" in install_update(good)
+        with patch("tartarus_v2.daemon_control.status", return_value=MagicMock(running=False)):
+            assert "could not download" in install_update(good)
 
     with patch("tartarus_v2.updater.urllib.request.urlopen", return_value=_Body()):
         with patch("tartarus_v2.updater.shutil.which", return_value=None):
-            assert "apt-get was not found" in install_update(good)
+            with patch("tartarus_v2.daemon_control.status", return_value=MagicMock(running=False)):
+                assert "apt-get was not found" in install_update(good)
 
     def which_sudo(name: str) -> str | None:
         return {"apt-get": "/usr/bin/apt-get", "sudo": "/usr/bin/sudo"}.get(name)
@@ -219,7 +233,11 @@ def test_install_failure_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         with patch("tartarus_v2.updater.shutil.which", side_effect=which_sudo):
             with patch("tartarus_v2.updater.os_euid_is_root", return_value=False):
                 with patch("tartarus_v2.updater.subprocess.run", return_value=failed):
-                    assert "Update failed" in install_update(good)
+                    with patch(
+                        "tartarus_v2.daemon_control.status",
+                        return_value=MagicMock(running=False),
+                    ):
+                        assert "Update failed" in install_update(good)
 
     with patch("tartarus_v2.updater.urllib.request.urlopen", return_value=_Body()):
         with patch(
@@ -227,7 +245,11 @@ def test_install_failure_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
             side_effect=lambda n: "/usr/bin/apt-get" if n == "apt-get" else None,
         ):
             with patch("tartarus_v2.updater.os_euid_is_root", return_value=False):
-                assert "pkexec/sudo not found" in install_update(good)
+                with patch(
+                    "tartarus_v2.daemon_control.status",
+                    return_value=MagicMock(running=False),
+                ):
+                    assert "pkexec/sudo not found" in install_update(good)
 
     with patch("tartarus_v2.updater.urllib.request.urlopen", return_value=_Body()):
         with patch(
@@ -236,8 +258,27 @@ def test_install_failure_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         ):
             with patch("tartarus_v2.updater.os_euid_is_root", return_value=True):
                 with patch("tartarus_v2.updater.subprocess.run", side_effect=OSError("nope")):
-                    assert "Update failed" in install_update(good)
+                    with patch(
+                        "tartarus_v2.daemon_control.status",
+                        return_value=MagicMock(running=False),
+                    ):
+                        assert "Update failed" in install_update(good)
     assert os_euid_is_root() is False
+
+
+def test_gui_relaunch_command() -> None:
+    from tartarus_v2.gui.update_dialog import _gui_relaunch_command
+
+    with patch("tartarus_v2.gui.update_dialog.shutil.which", return_value="/usr/bin/tartarus-v2"):
+        assert _gui_relaunch_command(debug=True) == [
+            "/usr/bin/tartarus-v2",
+            "gui",
+            "--debug",
+        ]
+    with patch("tartarus_v2.gui.update_dialog.shutil.which", return_value=None):
+        cmd = _gui_relaunch_command(debug=False)
+        assert cmd[-1] == "gui"
+        assert "tartarus_v2" in cmd
 
 
 def test_actions_and_controller_wrappers() -> None:

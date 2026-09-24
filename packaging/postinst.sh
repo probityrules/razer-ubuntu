@@ -35,3 +35,16 @@ fi
 
 echo "tartarus-v2: installed. Run: tartarus-v2 gui"
 echo "  If remapping fails: tartarus-v2 fix-permissions"
+
+# Best-effort: restart the installing user's remap daemon so upgrades load
+# new remapper code without a manual stop/start.
+if [ -n "$TARGET_USER" ] && [ "$TARGET_USER" != "root" ] && command -v tartarus-v2 >/dev/null 2>&1; then
+  if command -v runuser >/dev/null 2>&1; then
+    runuser -u "$TARGET_USER" -- tartarus-v2 daemon --stop >/dev/null 2>&1 || true
+    runuser -u "$TARGET_USER" -- tartarus-v2 daemon --background >/dev/null 2>&1 || true
+    echo "tartarus-v2: restarted remap daemon for '$TARGET_USER' (if it was/can run)."
+  elif command -v su >/dev/null 2>&1; then
+    su - "$TARGET_USER" -c "tartarus-v2 daemon --stop >/dev/null 2>&1 || true; tartarus-v2 daemon --background >/dev/null 2>&1 || true" || true
+    echo "tartarus-v2: attempted remap daemon restart for '$TARGET_USER'."
+  fi
+fi
