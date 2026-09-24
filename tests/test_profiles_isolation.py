@@ -18,6 +18,35 @@ def profile_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+def test_key_20_is_the_thumb_key(profile_home: Path) -> None:
+    """Legacy profiles that stored thumb and key_20 separately collapse to one key."""
+    path = prof.profiles_dir() / "legacy.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "name": "legacy",
+                "hypershift_key": "thumb",
+                "standard": {"bindings": {"key_20": "n", "thumb": "space", "key_19": "b"}},
+                "hypershift": {"bindings": {"key_20": "F17", "thumb": "enter"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    data = prof.load_profile("legacy")
+    assert data["hypershift_key"] == "key_20"
+    assert data["standard"]["bindings"]["key_20"] == "space"
+    assert data["hypershift"]["bindings"]["key_20"] == "enter"
+    assert "thumb" not in data["standard"]["bindings"]
+    assert "thumb" not in data["hypershift"]["bindings"]
+    assert data["standard"]["bindings"]["key_19"] == "b"
+
+    prof.save_profile(data, "legacy")
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored["hypershift_key"] == "key_20"
+    assert "thumb" not in stored["standard"]["bindings"]
+
+
 def test_load_profile_forces_filename_name(profile_home: Path) -> None:
     path = prof.profiles_dir() / "arena.json"
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from tartarus_v2.input.keys import KEYMAP_LAYOUT, short_label
+from tartarus_v2.input.keys import KEYMAP_LAYOUT, describe_logical, short_label
 
 
 def _format_binding(value: Any) -> str:
@@ -93,7 +93,7 @@ def build_keymap_grid(
         for logical, info in cells.items():
             info["button"].set_label(_cell_label(logical))
             tip = (
-                f"{logical}\n"
+                f"{describe_logical(logical)}\n"
                 f"Normal → {_format_binding(std.get(logical))}\n"
                 f"Hypershift → {_format_binding(hs.get(logical))}"
             )
