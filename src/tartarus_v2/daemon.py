@@ -110,11 +110,20 @@ class Daemon:
             self._remapper.run_forever()
         except Exception as exc:
             # Background starts discard stderr. Without this line the log only
-            # shows "Daemon stopped" and text editors keep firmware default keys.
-            log.error(
-                "Remapper failed; keypad keys stay at firmware defaults: %s",
-                exc,
-            )
+            # shows "Daemon stopped". ENODEV means the evdev node vanished (the
+            # keyboard interface was unbound), so editors get no keys at all.
+            # Other failures leave firmware default keys in place.
+            text = str(exc)
+            if "disappeared" in text or "No such device" in text:
+                log.error(
+                    "Remapper stopped because the keypad input node disappeared: %s",
+                    exc,
+                )
+            else:
+                log.error(
+                    "Remapper failed; keypad keys stay at firmware defaults: %s",
+                    exc,
+                )
             raise
         finally:
             self.stop()

@@ -33,6 +33,19 @@ else
   echo "Then log out/in."
 fi
 
+# Start the remap daemon at graphical login. systemctl --global enable writes
+# the wants symlink for every user; XDG autostart then no-ops if this unit
+# is enabled so the daemon is not launched twice.
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl --global enable tartarus-v2.service >/dev/null 2>&1 || true
+  if [ -n "$TARGET_USER" ] && [ "$TARGET_USER" != "root" ]; then
+    if command -v runuser >/dev/null 2>&1; then
+      runuser -u "$TARGET_USER" -- systemctl --user daemon-reload >/dev/null 2>&1 || true
+      runuser -u "$TARGET_USER" -- systemctl --user enable tartarus-v2.service >/dev/null 2>&1 || true
+    fi
+  fi
+fi
+
 echo "tartarus-v2: installed. Run: tartarus-v2 gui"
 echo "  If remapping fails: tartarus-v2 fix-permissions"
 

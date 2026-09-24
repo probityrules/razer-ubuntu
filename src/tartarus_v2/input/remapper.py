@@ -37,6 +37,39 @@ def grab_error_is_fatal(exc: OSError) -> bool:
     return err not in (errno.ENODEV, errno.ENOENT, errno.ENXIO)
 
 
+# linux/input-event-codes.h. Codes from BTN_MISC (0x100) up to KEY_OK (0x160)
+# are mouse, joystick, and gamepad buttons. udev's input_id tags a device
+# ID_INPUT_JOYSTICK and withholds ID_INPUT_KEY when those bits are set, and
+# libinput then ignores the node. The virtual keyboard shows up in evtest and
+# the physical keypad is grabbed, but text editors receive nothing.
+_BTN_MISC = 0x100
+_KEY_OK = 0x160
+
+
+def virtual_keyboard_keycodes(key_max: int) -> list[int]:
+    """EV_KEY codes that keep the uinput node classified as a keyboard."""
+    upper = max(0, int(key_max))
+    codes = list(range(1, min(upper, _BTN_MISC)))
+    if upper > _KEY_OK:
+        codes.extend(range(_KEY_OK, upper))
+    return codes
+
+
+def input_node_lost_message(exc: BaseException) -> str:
+    """Explain a mid-run ENODEV so it is not mistaken for a /dev/uinput failure.
+
+    The keypad's boot-keyboard evdev node vanishes when another process detaches
+    that USB interface. The remapper was the only path turning those events into
+    keystrokes, so text editors then receive nothing — not even firmware defaults.
+    """
+    return (
+        f"Keypad input node disappeared ({exc}). Another program detached the "
+        "keyboard USB interface while the remap daemon was reading it, so text "
+        "editors receive no keys, including firmware defaults. Replug the "
+        "Tartarus if keys stay dead after the daemon stops."
+    )
+
+
 def uinput_failure_message(exc: OSError) -> str:
     err = getattr(exc, "errno", None)
     if err in (errno.EACCES, errno.EPERM):
@@ -74,6 +107,7 @@ class Remapper:
         self._ui: Any = None
         self._ecodes: Any = None
         self._running = False
+        self._unknown_codes: set[int] = set()
 
     def _require_evdev(self) -> Any:
         try:
@@ -163,6 +197,23 @@ class Remapper:
                     pass
         return found
 
+    def find_devices_retry(self, timeout: float = 20.0) -> list[Any]:
+        """Poll for the keypad. Login autostart often runs before udev creates the nodes."""
+        deadline = time.monotonic() + max(0.0, timeout)
+        announced = False
+        while True:
+            found = self.find_devices()
+            if found or time.monotonic() >= deadline:
+                return found
+            if not announced:
+                log.info(
+                    "No Tartarus input nodes yet; waiting up to %ss "
+                    "(login autostart can run before the keypad is enumerated)",
+                    int(timeout),
+                )
+                announced = True
+            time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+
     @staticmethod
     def _is_physical_tartarus(dev: Any) -> bool:
         name = (getattr(dev, "name", None) or "").strip()
@@ -179,7 +230,7 @@ class Remapper:
         evdev = self._require_evdev()
         from evdev import UInput, ecodes
 
-        devices = self.find_devices()
+        devices = self.find_devices_retry()
         if not devices:
             raise RuntimeError(
                 "No Tartarus V2 input devices found under /dev/input. "
@@ -190,12 +241,10 @@ class Remapper:
             ", ".join(f"{getattr(d, 'name', '?')} ({getattr(d, 'path', '?')})" for d in devices),
         )
 
-        caps: dict[int, list[int]] = {ecodes.EV_KEY: [], ecodes.EV_REL: []}
-        key_set: set[int] = set()
-        for code in range(ecodes.KEY_MAX):
-            key_set.add(code)
-        caps[ecodes.EV_KEY] = sorted(key_set)
-        caps[ecodes.EV_REL] = [ecodes.REL_WHEEL, ecodes.REL_HWHEEL]
+        caps: dict[int, list[int]] = {
+            ecodes.EV_KEY: virtual_keyboard_keycodes(int(ecodes.KEY_MAX)),
+            ecodes.EV_REL: [ecodes.REL_WHEEL, ecodes.REL_HWHEEL],
+        }
 
         try:
             log.info("Creating virtual keyboard via /dev/uinput")
@@ -291,6 +340,24 @@ class Remapper:
                 return "scroll_down"
         return None
 
+    def _passthrough_unmapped(self, event: Any) -> None:
+        """Forward EV_KEY codes the logical map does not know.
+
+        The physical node is exclusively grabbed, so dropping an unknown code
+        means that key produces no output at all.
+        """
+        from evdev import ecodes
+
+        if event.type != ecodes.EV_KEY or event.value == 2 or event.code <= 0:
+            return
+        if event.code not in self._unknown_codes:
+            self._unknown_codes.add(event.code)
+            log.info(
+                "Unmapped EV_KEY code %s; passing it through to the virtual keyboard",
+                event.code,
+            )
+        self._emit([int(event.code)], event.value == 1)
+
     def _binding_for(self, logical: str) -> Any | None:
         layer_name = "hypershift" if self._hypershift_held else "standard"
         layer = self.profile.get(layer_name) or {}
@@ -380,12 +447,29 @@ class Remapper:
         fds = {d.fd: d for d in self._devices}
         try:
             while self._running:
-                r, _, _ = select.select(list(fds.keys()), [], [], 0.5)
+                try:
+                    r, _, _ = select.select(list(fds.keys()), [], [], 0.5)
+                except OSError as exc:
+                    if grab_error_is_fatal(exc):
+                        raise
+                    raise RuntimeError(input_node_lost_message(exc)) from exc
                 for fd in r:
                     dev = fds[fd]
-                    for event in dev.read():
+                    try:
+                        events = list(dev.read())
+                    except OSError as exc:
+                        if grab_error_is_fatal(exc):
+                            raise
+                        log.error(
+                            "Tartarus input node %s disappeared: %s",
+                            getattr(dev, "path", fd),
+                            exc,
+                        )
+                        raise RuntimeError(input_node_lost_message(exc)) from exc
+                    for event in events:
                         logical = self._logical_from_event(event)
                         if logical is None:
+                            self._passthrough_unmapped(event)
                             continue
                         from evdev import ecodes
 
