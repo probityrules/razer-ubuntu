@@ -107,6 +107,7 @@ def create_main_window(app: Any, debug: bool = False) -> Any:
     # App menu + persistent daemon LED (+ active profile when ON)
     menu = Gio.Menu()
     menu.append("Report issue…", "app.report_issue")
+    menu.append("Check for updates…", "app.check_update")
     menu.append("About Tartarus V2", "app.about")
     menu.append("Uninstall…", "app.uninstall")
     menu.append("Quit", "app.quit")
@@ -207,7 +208,7 @@ def show_about(window: Any) -> None:
         version=__version__,
         comments="Standalone userspace driver for Razer Tartarus V2 on Ubuntu",
         license_type=1,  # MIT approx — use LICENSE_MIT if available
-        website="https://github.com/",
+        website="https://github.com/probityrules/razer-ubuntu",
     )
     try:
         from gi.repository import Gtk

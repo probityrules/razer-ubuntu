@@ -57,12 +57,12 @@ def _add_permissions_group(page: Any, window: Any, ctrl: DaemonController | None
 
     daemon = ctrl or DaemonController()
     group = Adw.PreferencesGroup(title="Device access")
-    status_row = Adw.ActionRow(title="Groups (input, plugdev)")
+    status_row = Adw.ActionRow(title="Groups and /dev/uinput")
     fix_btn = Gtk.Button(label="Fix permissions")
     fix_btn.add_css_class("suggested-action")
     fix_row = Adw.ActionRow(
         title="Fix permissions",
-        subtitle="Adds you to input+plugdev via polkit, then reload udev (log out required)",
+        subtitle="input+plugdev and /dev/uinput via polkit (the driver does not run as root)",
     )
     fix_row.add_suffix(fix_btn)
 
@@ -80,8 +80,9 @@ def _add_permissions_group(page: Any, window: Any, ctrl: DaemonController | None
     def do_fix(_b: Any = None) -> None:
         dialog = Adw.AlertDialog.new(
             "Fix device permissions?",
-            "This asks for admin approval to add your user to the input and plugdev "
-            "groups and reload udev rules. You must log out and back in afterward.",
+            "This asks for admin approval once to add your user to input and plugdev, "
+            "allow /dev/uinput so remapped keys reach text editors, and reload udev. "
+            "The remap daemon does not need to run as root. Log out and back in afterward.",
         )
         dialog.add_response("cancel", "Cancel")
         dialog.add_response("fix", "Continue")
@@ -551,6 +552,8 @@ def build_bindings_page(window: Any) -> Any:
         description=(
             "Remaps are system-wide: the remap daemon exclusive-grabs the keypad "
             "and emits a virtual keyboard to every app — not only this window. "
+            "If the daemon cannot write /dev/uinput it exits and text editors keep "
+            "the default keys (root is not required; use Fix permissions). "
             "Key highlight here is a preview. Apply writes the profile; if the "
             "daemon is off it will be started so remaps take effect immediately."
         ),
@@ -959,8 +962,10 @@ def build_daemon_page(window: Any) -> Any:
         title="Remap daemon",
         description=(
             "System-wide driver: exclusive-grabs the Tartarus and injects a "
-            "virtual keyboard for every app. LED green = remaps are live; "
-            "LED grey = stock HID only (Bindings preview still works)."
+            "virtual keyboard for every app. Opening this window is not enough — "
+            "the header LED must stay green. LED grey means text editors still "
+            "get the firmware default keys. The daemon does not need root; it "
+            "needs a writable /dev/uinput (Fix permissions)."
         ),
     )
     status_row = Adw.ActionRow(title="Status", subtitle="Unknown")

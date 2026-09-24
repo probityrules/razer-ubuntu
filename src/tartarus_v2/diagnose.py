@@ -211,26 +211,29 @@ def _conflict_check() -> str:
 
 
 def _permissions() -> str:
-    import getpass
+    from tartarus_v2.permissions import (
+        database_group_names,
+        permission_status,
+        session_group_names,
+        uinput_status,
+    )
 
-    user = getpass.getuser()
-    groups: list[str] = []
-    try:
-        import grp
-
-        groups = [g.gr_name for g in grp.getgrall() if user in g.gr_mem]
-        groups.append(grp.getgrgid(os.getgid()).gr_name)
-    except ImportError:
-        groups = ["(grp module unavailable on this OS)"]
-    except Exception as exc:  # noqa: BLE001
-        groups = [f"(error listing groups: {exc})"]
-    in_input = "input" in groups
-    in_plugdev = "plugdev" in groups
+    user = permission_status().user
+    session = sorted(session_group_names())
+    database = sorted(database_group_names(user))
+    uinput_ok, uinput_detail = uinput_status()
+    st = permission_status()
     lines = [
         f"user={user}",
-        f"groups={sorted(set(groups))}",
-        f"in_input={in_input}",
-        f"in_plugdev={in_plugdev}",
+        f"session_groups={session}",
+        f"database_groups={database}",
+        f"in_input={'input' in session}",
+        f"in_plugdev={'plugdev' in session}",
+        f"database_in_input={'input' in database}",
+        f"uinput_writable={uinput_ok}",
+        uinput_detail,
+        f"permission_ok={st.ok}",
+        st.detail,
         "udev rules:",
     ]
     for pattern in (
@@ -245,42 +248,43 @@ def _permissions() -> str:
                 lines.append(f"  {h}")
         else:
             lines.append(f"  (no matches for {pattern})")
-    if not in_input:
+    if "input" not in session:
         lines.append(
-            "NOTE: not in group 'input' — remapper cannot open /dev/input/event* "
-            "(Permission denied). Fix: sudo usermod -aG input,plugdev \"$USER\" "
-            "then log out/in."
+            "NOTE: this login session is not in group 'input'. "
+            "/etc/group membership does not apply until you log out and back in. "
+            "The remap daemon does not need root, but without input (or uaccess) "
+            "it cannot grab the keypad or write /dev/uinput, so text editors keep "
+            "the default keys. Run: tartarus-v2 fix-permissions"
         )
-    if not in_plugdev:
+    if "plugdev" not in session:
         lines.append(
-            "NOTE: not in group 'plugdev' — hidraw/USB access may fail for chroma."
+            "NOTE: this login session is not in group 'plugdev' — hidraw/USB access may fail for chroma."
+        )
+    if "input" in database and "input" not in session:
+        lines.append(
+            "NOTE: input is listed for this user in the group database but not in "
+            "the current session. Log out and back in."
         )
     return "\n".join(lines)
 
 
 def _issues() -> str:
     """Summarize actionable problems from a quick re-check (for operators)."""
-    import getpass
+    from tartarus_v2.permissions import permission_status, session_group_names
 
     findings: list[str] = []
-    user = getpass.getuser()
-    groups: set[str] = set()
-    try:
-        import grp
-
-        groups = {g.gr_name for g in grp.getgrall() if user in g.gr_mem}
-        groups.add(grp.getgrgid(os.getgid()).gr_name)
-    except Exception:  # noqa: BLE001
-        pass
-
-    if "input" not in groups:
+    session = session_group_names()
+    st = permission_status()
+    if not st.ok:
+        findings.append(st.detail)
+    elif "input" not in session:
         findings.append(
-            "User not in 'input' group → remapping fails with Permission denied on "
-            "/dev/input/event*. Run: sudo usermod -aG input,plugdev \"$USER\" && log out/in."
+            "This login session is not in 'input'. Remapping does not need root, "
+            "but the daemon cannot grab the keypad until you log out and back in."
         )
-    if "plugdev" not in groups:
+    if "plugdev" not in session and not any("plugdev" in f for f in findings):
         findings.append(
-            "User not in 'plugdev' group → hidraw/USB chroma may fail without uaccess."
+            "This login session is not in 'plugdev' → hidraw/USB chroma may fail without uaccess."
         )
 
     tartarus_rules = glob.glob("/lib/udev/rules.d/*tartarus*") + glob.glob(
@@ -299,6 +303,12 @@ def _issues() -> str:
             findings.append(
                 "Daemon log shows Permission denied opening Tartarus input nodes "
                 "(same root cause as missing 'input' group / udev MODE)."
+            )
+        if "/dev/uinput" in text or "Remapper failed" in text:
+            findings.append(
+                "Daemon log shows the virtual keyboard was not created (/dev/uinput). "
+                "The keypad then stays on firmware default keys in text editors. "
+                "Root is not required: tartarus-v2 fix-permissions, then log out/in."
             )
 
     if not findings:

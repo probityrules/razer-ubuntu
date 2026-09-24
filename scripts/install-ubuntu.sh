@@ -27,6 +27,7 @@ pip install -e ".[linux,dev]"
 
 echo "==> Installing udev rules"
 sudo cp "$ROOT/scripts/99-tartarus-v2.rules" /etc/udev/rules.d/99-tartarus-v2.rules
+sudo modprobe uinput || true
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 

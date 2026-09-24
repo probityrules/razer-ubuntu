@@ -306,6 +306,45 @@ def test_key_listen_describe_and_format() -> None:
     assert "virtual" in virt.mapping
 
 
+def test_session_groups_ignore_database_until_relogin(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tartarus_v2 import permissions
+
+    monkeypatch.setattr(permissions, "current_username", lambda: "alice")
+    monkeypatch.setattr(permissions, "session_group_names", lambda: {"users"})
+    monkeypatch.setattr(
+        permissions,
+        "database_group_names",
+        lambda _u: {"users", "input", "plugdev"},
+    )
+    monkeypatch.setattr(permissions, "uinput_status", lambda: (False, "/dev/uinput is not writable"))
+    assert permissions.user_group_names() == {"users"}
+    st = permissions.permission_status()
+    assert st.needs_relogin
+    assert not st.ok
+    assert "Log out" in st.detail
+    assert "root" in st.detail
+
+
+def test_uinput_status_branches(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tartarus_v2 import permissions
+
+    monkeypatch.setattr(permissions.os.path, "exists", lambda _p: False)
+    ok, detail = permissions.uinput_status()
+    assert not ok
+    assert "missing" in detail
+
+    monkeypatch.setattr(permissions.os.path, "exists", lambda _p: True)
+    monkeypatch.setattr(permissions.os, "access", lambda _p, _m: True)
+    ok, detail = permissions.uinput_status()
+    assert ok
+    assert "writable" in detail
+
+    monkeypatch.setattr(permissions.os, "access", lambda _p, _m: False)
+    ok, detail = permissions.uinput_status()
+    assert not ok
+    assert "not writable" in detail
+
+
 def test_permissions_status_and_fix(monkeypatch: pytest.MonkeyPatch) -> None:
     from tartarus_v2 import permissions
     from tartarus_v2.permissions import PermissionStatus
@@ -317,7 +356,12 @@ def test_permissions_status_and_fix(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "input" in st.missing
 
     monkeypatch.setattr(permissions, "user_group_names", lambda _u=None: {"input", "plugdev"})
+    monkeypatch.setattr(permissions, "uinput_status", lambda: (True, "/dev/uinput is writable"))
     assert permissions.permission_status().ok
+    monkeypatch.setattr(permissions, "uinput_status", lambda: (False, "/dev/uinput is not writable"))
+    denied = permissions.permission_status()
+    assert not denied.ok
+    assert "uinput" in denied.detail
 
     monkeypatch.setattr(
         permissions,
@@ -419,7 +463,10 @@ def test_permissions_root_and_missing_tools(monkeypatch: pytest.MonkeyPatch) -> 
     with patch("tartarus_v2.permissions.subprocess.run", side_effect=fake_run):
         msg = permissions._apply_as_root("carol")
         assert "Log out" in msg or "log out" in msg.lower()
-        assert any(c[0] == "usermod" for c in calls)
+        assert calls and calls[0][0] == "sh"
+        script = calls[0][2]
+        assert "usermod" in script
+        assert "modprobe uinput" in script
 
 
 def test_features_collect_empty() -> None:

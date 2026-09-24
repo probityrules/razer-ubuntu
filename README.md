@@ -71,7 +71,7 @@ Native **Libadwaita** app (`Adw.Application` + sidebar navigation):
 
 The header shows a persistent **daemon LED** (green = running, grey = stopped). When the daemon is on, the **active profile name** appears beside the LED and updates when you switch profiles (Profiles page or Bindings dropdown). Device info refreshes automatically while that page is open.
 
-App menu → **Report issue…** opens a Notefully-style dialog (kind, author, note). Submits to your Notefully relay with a diagnose dump and log tail attached in the report context (no screenshots).
+App menu → **Check for updates…** compares this install with the latest GitHub Release and can install the `.deb`. **Report issue…** opens a Notefully-style dialog (kind, author, note). Submits to your Notefully relay with a diagnose dump and log tail attached in the report context (no screenshots).
 
 Release `.deb` builds embed the public project key from the GitHub Actions repository variable **`NOTEFULLY_PROJECT_KEY`** (optional **`NOTEFULLY_ENDPOINT`**). Overrides still work:
 
@@ -108,6 +108,8 @@ Editing keys on the **Bindings** page only updates the profile JSON and a **prev
 3. It emits keys via **uinput** as `Tartarus V2 Virtual Keyboard` — visible to the whole desktop session.
 
 If the LED is grey, presses are still stock firmware layout everywhere (the GUI can still light up keys as a preview). **Apply** on Bindings saves the profile and starts the daemon if needed. Also enable **Start at login** on the Daemon page, and run `tartarus-v2 fix-permissions` if grab fails.
+
+The daemon does **not** need to run as root. It has to write `/dev/uinput` to create the virtual keyboard. If that node is missing or not writable, the daemon exits immediately and a text editor keeps the firmware default keys. App menu → **Check for updates…** installs a newer GitHub Release `.deb`.
 
 ## Hypershift
 

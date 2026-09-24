@@ -42,6 +42,15 @@ def build_parser() -> argparse.ArgumentParser:
         "fix-permissions",
         help="Add current user to input+plugdev (pkexec) and reload udev",
     )
+    p_update = sub.add_parser(
+        "update",
+        help="Check GitHub for a newer tartarus-v2 .deb (optional --install)",
+    )
+    p_update.add_argument(
+        "--install",
+        action="store_true",
+        help="Download and install the newer .deb (asks for admin)",
+    )
 
     p_effect = sub.add_parser("set-effect", help="Set a lighting effect")
     _add_common(p_effect)
@@ -104,6 +113,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "fix-permissions":
         print(actions.fix_permissions())
         return 0
+
+    if args.command == "update":
+        info = actions.check_for_update()
+        print(info.detail)
+        if not info.update_available:
+            return 0 if info.latest else 1
+        if not getattr(args, "install", False):
+            print("Re-run with: tartarus-v2 update --install")
+            return 0
+        message = actions.install_update(info)
+        print(message)
+        return 0 if message.startswith("Installed") else 1
 
     if args.command == "set-effect":
         actions.set_effect(

@@ -32,6 +32,11 @@ class TrayController:
 
         return cycle_profile("next")
 
+    def check_for_update(self) -> Any:
+        from tartarus_v2 import actions
+
+        return actions.check_for_update()
+
     def uninstall(self) -> str:
         from tartarus_v2 import actions
 
@@ -47,6 +52,7 @@ def menu_action_ids() -> tuple[str, ...]:
         "start_daemon",
         "stop_daemon",
         "cycle_profile_next",
+        "check_for_update",
         "uninstall",
         "quit_app",
     )
@@ -105,6 +111,16 @@ def attach_tray(
             log.info("Switched profile to %s", name)
 
     add_item("Next profile", next_profile)
+
+    def do_check_update() -> None:
+        try:
+            from tartarus_v2.gui.update_dialog import present_update_check
+
+            present_update_check(window)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Check for updates failed: %s", exc)
+
+    add_item("Check for updates…", do_check_update)
 
     def do_uninstall() -> None:
         # GTK3 MenuItem → use a simple confirm via print/log; GUI dialog needs GTK4 window.

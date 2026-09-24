@@ -63,6 +63,26 @@ def status() -> DaemonStatus:
     return DaemonStatus(running=False, pid=pid, detail="stale pid file removed")
 
 
+def _recent_daemon_error() -> str:
+    """Last ERROR line from the daemon log, for an immediate-exit message."""
+    try:
+        from tartarus_v2.logging_util import log_path
+
+        path = log_path()
+        if not path.is_file():
+            return ""
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines[-40:]):
+        if " ERROR " not in line:
+            continue
+        msg = line.split(" ERROR ", 1)[-1].strip()
+        if msg:
+            return msg[:500]
+    return ""
+
+
 def start(profile: str | None = None, debug: bool = False) -> DaemonStatus:
     current = status()
     if current.running:
@@ -85,10 +105,18 @@ def start(profile: str | None = None, debug: bool = False) -> DaemonStatus:
     pid_path().write_text(str(proc.pid) + "\n", encoding="utf-8")
     time.sleep(0.2)
     if proc.poll() is not None:
+        try:
+            pid_path().unlink(missing_ok=True)
+        except OSError:
+            pass
+        detail = f"daemon exited immediately code={proc.returncode}"
+        reason = _recent_daemon_error()
+        if reason:
+            detail = f"{detail}: {reason}"
         return DaemonStatus(
             running=False,
             pid=proc.pid,
-            detail=f"daemon exited immediately code={proc.returncode}",
+            detail=detail,
         )
     return DaemonStatus(running=True, pid=proc.pid, detail="started")
 

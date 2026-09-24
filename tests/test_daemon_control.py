@@ -56,3 +56,25 @@ def test_reload_when_not_running(pid_home: Path) -> None:
     st = daemon_control.reload()
     assert not st.running
     assert "not running" in st.detail
+
+
+def test_start_reports_log_error_when_daemon_exits(pid_home: Path) -> None:
+    log = pid_home / "tartarus-v2" / "tartarus-v2.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        "2026-09-24T18:21:42.923 ERROR tartarus_v2.daemon: "
+        "Remapper failed; keypad keys stay at firmware defaults: "
+        "Cannot create the virtual keyboard (/dev/uinput): permission denied.\n",
+        encoding="utf-8",
+    )
+    proc = MagicMock()
+    proc.pid = 99
+    proc.poll.return_value = 1
+    proc.returncode = 1
+    with patch("tartarus_v2.daemon_control.subprocess.Popen", return_value=proc):
+        with patch("tartarus_v2.daemon_control.time.sleep"):
+            st = daemon_control.start()
+    assert not st.running
+    assert "exited immediately" in st.detail
+    assert "/dev/uinput" in st.detail
+    assert not daemon_control.pid_path().exists()

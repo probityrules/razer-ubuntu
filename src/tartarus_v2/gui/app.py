@@ -28,6 +28,7 @@ def run_gui(debug: bool = False) -> int:
 
     from tartarus_v2.gui.report_issue import show_report_issue_dialog
     from tartarus_v2.gui.tray import attach_tray
+    from tartarus_v2.gui.update_dialog import present_update_check
     from tartarus_v2.gui.window import create_main_window, show_about
 
     app = Adw.Application(application_id="com.tartarus_v2.app")
@@ -66,6 +67,21 @@ def run_gui(debug: bool = False) -> int:
             try:
                 if getattr(win, "_toast_overlay", None):
                     win._toast_overlay.add_toast(Adw.Toast.new(f"Report issue failed: {exc}"))
+            except Exception:  # noqa: BLE001
+                pass
+
+    def on_check_update(_action: Gio.SimpleAction, _param: None) -> None:
+        win = state["window"]
+        if win is None:
+            log.warning("Check for updates: no window yet")
+            return
+        try:
+            present_update_check(win)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Check for updates failed")
+            try:
+                if getattr(win, "_toast_overlay", None):
+                    win._toast_overlay.add_toast(Adw.Toast.new(f"Update check failed: {exc}"))
             except Exception:  # noqa: BLE001
                 pass
 
@@ -112,6 +128,10 @@ def run_gui(debug: bool = False) -> int:
     report_action = Gio.SimpleAction.new("report_issue", None)
     report_action.connect("activate", on_report_issue)
     app.add_action(report_action)
+
+    update_action = Gio.SimpleAction.new("check_update", None)
+    update_action.connect("activate", on_check_update)
+    app.add_action(update_action)
 
     uninstall_action = Gio.SimpleAction.new("uninstall", None)
     uninstall_action.connect("activate", on_uninstall)
