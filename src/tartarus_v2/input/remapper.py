@@ -37,6 +37,21 @@ def grab_error_is_fatal(exc: OSError) -> bool:
     return err not in (errno.ENODEV, errno.ENOENT, errno.ENXIO)
 
 
+def input_node_lost_message(exc: BaseException) -> str:
+    """Explain a mid-run ENODEV so it is not mistaken for a /dev/uinput failure.
+
+    The keypad's boot-keyboard evdev node vanishes when another process detaches
+    that USB interface. The remapper was the only path turning those events into
+    keystrokes, so text editors then receive nothing — not even firmware defaults.
+    """
+    return (
+        f"Keypad input node disappeared ({exc}). Another program detached the "
+        "keyboard USB interface while the remap daemon was reading it, so text "
+        "editors receive no keys, including firmware defaults. Replug the "
+        "Tartarus if keys stay dead after the daemon stops."
+    )
+
+
 def uinput_failure_message(exc: OSError) -> str:
     err = getattr(exc, "errno", None)
     if err in (errno.EACCES, errno.EPERM):
@@ -380,10 +395,26 @@ class Remapper:
         fds = {d.fd: d for d in self._devices}
         try:
             while self._running:
-                r, _, _ = select.select(list(fds.keys()), [], [], 0.5)
+                try:
+                    r, _, _ = select.select(list(fds.keys()), [], [], 0.5)
+                except OSError as exc:
+                    if grab_error_is_fatal(exc):
+                        raise
+                    raise RuntimeError(input_node_lost_message(exc)) from exc
                 for fd in r:
                     dev = fds[fd]
-                    for event in dev.read():
+                    try:
+                        events = list(dev.read())
+                    except OSError as exc:
+                        if grab_error_is_fatal(exc):
+                            raise
+                        log.error(
+                            "Tartarus input node %s disappeared: %s",
+                            getattr(dev, "path", fd),
+                            exc,
+                        )
+                        raise RuntimeError(input_node_lost_message(exc)) from exc
+                    for event in events:
                         logical = self._logical_from_event(event)
                         if logical is None:
                             continue

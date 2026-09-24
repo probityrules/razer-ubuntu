@@ -268,6 +268,48 @@ def _permissions() -> str:
     return "\n".join(lines)
 
 
+def daemon_log_findings(text: str) -> list[str]:
+    """Turn recent daemon log lines into operator-facing findings.
+
+    A successful ``Creating virtual keyboard via /dev/uinput`` line must not be
+    reported as a permissions failure. The Diagnose→Daemon crash leaves that
+    success line plus ``Claimed alternate interface 0`` and ``No such device``.
+    """
+    findings: list[str] = []
+    if "Permission denied" in text and "/dev/input" in text:
+        findings.append(
+            "Daemon log shows Permission denied opening Tartarus input nodes "
+            "(same root cause as missing 'input' group / udev MODE)."
+        )
+
+    node_lost = (
+        "No such device" in text
+        or "input node disappeared" in text
+        or "Claimed alternate interface 0" in text
+        or "Claimed alternate interface 2" in text
+    )
+    if node_lost:
+        findings.append(
+            "Daemon log: the remap daemon lost the keypad (ENODEV / No such device) "
+            "after another open claimed the keyboard USB interface and detached its "
+            "kernel driver. The virtual keyboard had already been created; this is "
+            "not a /dev/uinput permission problem. While that interface is unbound, "
+            "text editors receive no keys at all, including firmware defaults. "
+            "Replug the Tartarus if keys stay dead after the daemon stops."
+        )
+
+    uinput_failed = "Cannot create the virtual keyboard" in text or (
+        "Permission denied" in text and "/dev/uinput" in text
+    )
+    if uinput_failed and not node_lost:
+        findings.append(
+            "Daemon log shows the virtual keyboard was not created (/dev/uinput). "
+            "The keypad then stays on firmware default keys in text editors. "
+            "Root is not required: tartarus-v2 fix-permissions, then log out/in."
+        )
+    return findings
+
+
 def _issues() -> str:
     """Summarize actionable problems from a quick re-check (for operators)."""
     from tartarus_v2.permissions import permission_status, session_group_names
@@ -299,17 +341,7 @@ def _issues() -> str:
     log = log_path()
     if log.exists():
         text = _read_text(log, limit=120)
-        if "Permission denied" in text and "/dev/input" in text:
-            findings.append(
-                "Daemon log shows Permission denied opening Tartarus input nodes "
-                "(same root cause as missing 'input' group / udev MODE)."
-            )
-        if "/dev/uinput" in text or "Remapper failed" in text:
-            findings.append(
-                "Daemon log shows the virtual keyboard was not created (/dev/uinput). "
-                "The keypad then stays on firmware default keys in text editors. "
-                "Root is not required: tartarus-v2 fix-permissions, then log out/in."
-            )
+        findings.extend(daemon_log_findings(text))
 
     if not findings:
         return "No obvious configuration issues detected."
@@ -319,6 +351,18 @@ def _issues() -> str:
 def _live_probe(debug: bool = True) -> str:
     lines: list[str] = []
     try:
+        from tartarus_v2.daemon_control import status as daemon_status
+
+        running = daemon_status()
+        if running.running:
+            return (
+                "live probe skipped: remap daemon is running"
+                + (f" (pid {running.pid})" if running.pid else "")
+                + ". It already owns the chroma USB interface. Probing would "
+                "open the keypad a second time and can unbind the keyboard, "
+                "after which text editors receive no keys."
+            )
+
         from tartarus_v2.hid.chroma import ChromaController
         from tartarus_v2.hid.device import TartarusDevice
         from tartarus_v2.hid import protocol

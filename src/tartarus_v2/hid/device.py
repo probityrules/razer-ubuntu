@@ -12,6 +12,14 @@ from tartarus_v2.logging_util import annotate_report
 
 log = logging.getLogger("tartarus_v2.hid")
 
+# Interface 0 is the boot keyboard and interface 2 is the mouse. The remap
+# daemon reads those evdev nodes (interface 1 is held for chroma). Detaching
+# either input interface deletes the node mid-read; the remapper then dies
+# with ENODEV and text editors receive no keys, including firmware defaults.
+KEYBOARD_INTERFACE = 0
+MOUSE_INTERFACE = 2
+INPUT_INTERFACES = (KEYBOARD_INTERFACE, MOUSE_INTERFACE)
+
 
 class DeviceError(RuntimeError):
     pass
@@ -24,7 +32,7 @@ class TartarusDevice:
         self.debug = debug
         self._usb: Any = None
         self._claimed_iface: int | None = None
-        self._detached = False
+        self._detached_ifaces: list[int] = []
 
     def open(self) -> None:
         try:
@@ -42,42 +50,33 @@ class TartarusDevice:
                 "Is the Tartarus V2 plugged in?"
             )
 
-        # Prefer interface matching REPORT_INDEX; fall back to first available.
-        iface = C.REPORT_INDEX
-        try:
-            if dev.is_kernel_driver_active(iface):
-                dev.detach_kernel_driver(iface)
-                self._detached = True
-                log.info("Detached kernel driver from interface %s", iface)
-        except (usb.core.USBError, NotImplementedError, ValueError) as exc:
-            log.debug("detach_kernel_driver(%s): %s", iface, exc)
+        # Heal a keypad left unbound by an earlier alternate-interface claim.
+        self._restore_unbound_inputs(dev)
 
+        iface = C.REPORT_INDEX
+        self._detach_kernel(dev, iface)
         try:
             usb.util.claim_interface(dev, iface)
-            self._claimed_iface = iface
         except usb.core.USBError as exc:
-            # Try alternate interfaces 0..2
-            claimed = False
-            for alt in (0, 1, 2):
-                if alt == iface:
-                    continue
-                try:
-                    if dev.is_kernel_driver_active(alt):
-                        dev.detach_kernel_driver(alt)
-                        self._detached = True
-                    usb.util.claim_interface(dev, alt)
-                    self._claimed_iface = alt
-                    iface = alt
-                    claimed = True
-                    log.warning("Claimed alternate interface %s", alt)
-                    break
-                except usb.core.USBError:
-                    continue
-            if not claimed:
-                raise DeviceError(
-                    f"Could not claim USB interface (tried {C.REPORT_INDEX} and 0-2): {exc}"
-                ) from exc
+            # Do not fall back onto interface 0 or 2. Those still have hid-generic
+            # bound so the desktop can see key and mouse events. Claiming them
+            # requires detaching that driver, which is what kills the remapper
+            # when the GUI or diagnose probe opens the device while the daemon
+            # already owns interface 1.
+            self._reattach_detached(dev)
+            try:
+                usb.util.dispose_resources(dev)
+            except Exception:  # noqa: BLE001
+                pass
+            raise DeviceError(
+                f"Could not claim USB interface {iface} ({exc}). "
+                "If the remap daemon is running it already owns this interface. "
+                "Refusing to detach the keyboard or mouse interface, because that "
+                "stops every key — including firmware defaults — from reaching "
+                "text editors."
+            ) from exc
 
+        self._claimed_iface = iface
         self._usb = dev
         log.info(
             "Opened %s (%04x:%04x) on interface %s",
@@ -87,27 +86,92 @@ class TartarusDevice:
             self._claimed_iface,
         )
 
+    def _kernel_driver_active(self, dev: Any, iface: int) -> bool:
+        try:
+            return bool(dev.is_kernel_driver_active(iface))
+        except Exception as exc:  # noqa: BLE001
+            log.debug("is_kernel_driver_active(%s): %s", iface, exc)
+            return False
+
+    def _detach_kernel(self, dev: Any, iface: int) -> None:
+        if iface in INPUT_INTERFACES:
+            log.error(
+                "Refusing to detach kernel driver from input interface %s",
+                iface,
+            )
+            return
+        if not self._kernel_driver_active(dev, iface):
+            return
+        try:
+            dev.detach_kernel_driver(iface)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("detach_kernel_driver(%s): %s", iface, exc)
+            return
+        if iface not in self._detached_ifaces:
+            self._detached_ifaces.append(iface)
+        log.info("Detached kernel driver from interface %s", iface)
+
+    def _restore_unbound_inputs(self, dev: Any) -> None:
+        """Rebind hid-generic on the keyboard and mouse if a prior open left them unbound."""
+        for iface in INPUT_INTERFACES:
+            if self._kernel_driver_active(dev, iface):
+                continue
+            try:
+                dev.attach_kernel_driver(iface)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "Input interface %s has no kernel driver and could not be rebound (%s). "
+                    "Keys on that interface will not reach a text editor until the "
+                    "keypad is replugged.",
+                    iface,
+                    exc,
+                )
+                continue
+            log.info(
+                "Reattached kernel driver on input interface %s "
+                "(keypad events were unbound)",
+                iface,
+            )
+
+    def _reattach_detached(self, dev: Any) -> None:
+        for iface in list(self._detached_ifaces):
+            try:
+                dev.attach_kernel_driver(iface)
+                log.info("Reattached kernel driver on interface %s", iface)
+            except Exception as exc:  # noqa: BLE001
+                log.error(
+                    "Could not reattach kernel driver on interface %s (%s). "
+                    "Replug the keypad if it stops sending keys.",
+                    iface,
+                    exc,
+                )
+            finally:
+                try:
+                    self._detached_ifaces.remove(iface)
+                except ValueError:
+                    pass
+
     def close(self) -> None:
         if self._usb is None:
             return
+        dev = self._usb
         try:
             import usb.util
 
             if self._claimed_iface is not None:
                 try:
-                    usb.util.release_interface(self._usb, self._claimed_iface)
+                    usb.util.release_interface(dev, self._claimed_iface)
                 except Exception:  # noqa: BLE001
                     pass
-            if self._detached and self._claimed_iface is not None:
-                try:
-                    self._usb.attach_kernel_driver(self._claimed_iface)
-                except Exception:  # noqa: BLE001
-                    pass
-            usb.util.dispose_resources(self._usb)
+            self._reattach_detached(dev)
+            # If some other opener unbound the keyboard, put it back now that
+            # we are releasing the device.
+            self._restore_unbound_inputs(dev)
+            usb.util.dispose_resources(dev)
         finally:
             self._usb = None
             self._claimed_iface = None
-            self._detached = False
+            self._detached_ifaces = []
 
     def __enter__(self) -> TartarusDevice:
         self.open()

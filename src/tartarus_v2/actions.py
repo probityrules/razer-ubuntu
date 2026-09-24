@@ -19,7 +19,26 @@ LIGHTING_EFFECTS = (
 )
 
 
+def _running_daemon():
+    """Status of the remap daemon, or None when it is not running."""
+    from tartarus_v2.daemon_control import status
+
+    st = status()
+    return st if st.running else None
+
+
 def device_info(debug: bool = False) -> dict[str, Any]:
+    # The Device page polls this on map. Opening the keypad while the daemon
+    # already holds the chroma interface used to fall back to the keyboard
+    # interface and unbind it, which crashed the remapper.
+    running = _running_daemon()
+    if running is not None:
+        return {
+            "firmware": "—",
+            "serial": f"remap daemon owns the keypad (pid {running.pid})",
+            "brightness": "—",
+        }
+
     from tartarus_v2.hid.chroma import ChromaController
     from tartarus_v2.hid.device import TartarusDevice
 
@@ -32,7 +51,49 @@ def device_info(debug: bool = False) -> dict[str, Any]:
         }
 
 
+def _apply_lighting_via_daemon(
+    effect: str,
+    *,
+    rgb: str,
+    rgb2: str | None,
+    direction: int,
+    speed: int,
+    brightness: int | None,
+) -> None:
+    """Ask the running daemon to apply lighting. Do not open the keypad again."""
+    import logging
+
+    data = prof.load_profile(prof.get_active_profile_name())
+    lighting: dict[str, Any] = {
+        "effect": effect,
+        "rgb": rgb,
+        "direction": direction,
+        "speed": speed,
+    }
+    if brightness is not None:
+        lighting["brightness"] = brightness
+    if rgb2:
+        lighting["rgb2"] = rgb2
+    data["lighting"] = lighting
+    prof.save_profile(data, data.get("name"))
+    detail = nudge_daemon_reload()
+    logging.getLogger("tartarus_v2.hid").info(
+        "Daemon already owns the keypad; applied %s via profile reload (%s)",
+        effect,
+        detail,
+    )
+
+
 def set_brightness(value: int, debug: bool = False) -> None:
+    if _running_daemon() is not None:
+        data = prof.load_profile(prof.get_active_profile_name())
+        lighting = dict(data.get("lighting") or {})
+        lighting["brightness"] = int(value)
+        data["lighting"] = lighting
+        prof.save_profile(data, data.get("name"))
+        nudge_daemon_reload()
+        return
+
     from tartarus_v2.hid.chroma import ChromaController
     from tartarus_v2.hid.device import TartarusDevice
 
@@ -52,6 +113,17 @@ def set_effect(
 ) -> None:
     if effect not in LIGHTING_EFFECTS:
         raise ValueError(f"Unknown effect: {effect}")
+
+    if _running_daemon() is not None:
+        _apply_lighting_via_daemon(
+            effect,
+            rgb=rgb,
+            rgb2=rgb2,
+            direction=direction,
+            speed=speed,
+            brightness=brightness,
+        )
+        return
 
     from tartarus_v2.hid.chroma import ChromaController
     from tartarus_v2.hid.device import TartarusDevice
