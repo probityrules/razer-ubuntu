@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from tartarus_v2.constants import DEFAULT_PROFILE_NAME
+from tartarus_v2.input.keys import fold_thumb_alias
 from tartarus_v2.logging_util import cache_dir
 
 
@@ -73,8 +74,7 @@ def default_profile() -> dict[str, Any]:
                 "key_17": "super",
                 "key_18": "alt",
                 "key_19": "b",
-                "key_20": "n",
-                "thumb": "space",
+                "key_20": "space",
                 "stick_up": "up",
                 "stick_down": "down",
                 "stick_left": "left",
@@ -107,8 +107,7 @@ def default_profile() -> dict[str, Any]:
                 "key_17": "F14",
                 "key_18": "F15",
                 "key_19": "F16",
-                "key_20": "F17",
-                "thumb": "enter",
+                "key_20": "enter",
                 "stick_up": "pageup",
                 "stick_down": "pagedown",
                 "stick_left": "home",
@@ -138,12 +137,15 @@ def load_profile(name: str = DEFAULT_PROFILE_NAME) -> dict[str, Any]:
     data.setdefault("standard", {"bindings": {}})
     data.setdefault("hypershift", {"bindings": {}})
     data.setdefault("lighting", {"effect": "spectrum", "brightness": 128})
+    fold_thumb_alias(data)
     # Isolate callers from each other and from future in-place mutations.
     return copy.deepcopy(data)
 
 
 def save_profile(profile: dict[str, Any], name: str | None = None) -> Path:
     name = name or profile.get("name") or DEFAULT_PROFILE_NAME
+    # Canonicalize before copying so the caller's object matches what is stored.
+    fold_thumb_alias(profile)
     # Deep-copy so callers cannot accidentally share nested bindings across profiles.
     profile = copy.deepcopy(profile)
     profile["name"] = name

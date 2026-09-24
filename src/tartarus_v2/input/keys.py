@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 # Logical name -> default Linux keycode emitted by the firmware/HID stack.
 # Derived from OpenRazer TARTARUS_EVENT_MAPPING (inverted) plus scroll extras.
 LOGICAL_TO_CODE: dict[str, int] = {
@@ -20,14 +22,14 @@ LOGICAL_TO_CODE: dict[str, int] = {
     "key_13": 45,   # KEY_X
     "key_14": 46,   # KEY_C
     "key_15": 47,   # KEY_V
-    # Bottom keypad row (Synapse 16–19). key_20 is shown as the thumb key in the UI.
+    # Bottom keypad row is Synapse 16–19 only. Key 20 is the thumb key
+    # (hyperesponse / spacebar), not a fifth key on that row.
     "key_16": 29,   # KEY_LEFTCTRL
     "key_17": 125,  # KEY_LEFTMETA (Super)
     "key_18": 100,  # KEY_RIGHTALT
     "key_19": 127,  # KEY_COMPOSE
-    "key_20": 54,   # KEY_RIGHTSHIFT (also editable via combo; pad shows thumb as 20)
+    "key_20": 57,   # KEY_SPACE — Synapse key 20 / hyperesponse thumb
     "mode": 56,     # KEY_LEFTALT / MODE_SWITCH
-    "thumb": 57,    # KEY_SPACE — Synapse "20" / thumb
     "stick_up": 103,
     "stick_left": 105,
     "stick_right": 106,
@@ -35,6 +37,11 @@ LOGICAL_TO_CODE: dict[str, int] = {
 }
 
 CODE_TO_LOGICAL: dict[int, str] = {v: k for k, v in LOGICAL_TO_CODE.items()}
+
+# Older profiles and hypershift settings used ``thumb`` as a second id for key 20.
+LOGICAL_ALIASES: dict[str, str] = {
+    "thumb": "key_20",
+}
 
 # Friendly names for common output keycodes (subset; remapper also accepts names via evdev.ecodes)
 OUTPUT_ALIASES: dict[str, str] = {
@@ -69,17 +76,17 @@ ALL_LOGICAL_KEYS = sorted(LOGICAL_TO_CODE.keys()) + [
     "scroll_click",
 ]
 
-# Top-down layout matching Synapse-style numbering the user expects:
-#   01–05 / 06–10 / 11–15 / 16–19
+# Top-down layout matching Synapse-style numbering:
+#   01–05 / 06–10 / 11–15 / 16–19   (bottom keypad row is four keys)
 #   scr up, scr, scr down
-#   mode, lf, up, rt, dn, thumb(20)
+#   mode, lf, up, rt, dn, key 20 (thumb — not part of the keypad row)
 KEYMAP_LAYOUT: list[list[str | None]] = [
     ["key_01", "key_02", "key_03", "key_04", "key_05"],
     ["key_06", "key_07", "key_08", "key_09", "key_10"],
     ["key_11", "key_12", "key_13", "key_14", "key_15"],
-    ["key_16", "key_17", "key_18", "key_19", None],
+    ["key_16", "key_17", "key_18", "key_19"],
     ["scroll_up", "scroll_click", "scroll_down", None, None],
-    ["mode", "stick_left", "stick_up", "stick_right", "stick_down", "thumb"],
+    ["mode", "stick_left", "stick_up", "stick_right", "stick_down", "key_20"],
 ]
 
 KEYMAP_ASCII = """
@@ -91,12 +98,12 @@ Tartarus V2 logical key map (for bindings / profile JSON)
   [11] [12] [13] [14] [15]
   [16] [17] [18] [19]
   [Scr↑] [Scr•] [Scr↓]
-  [mode] [←] [↑] [→] [↓] [20/thumb]
+  [mode] [←] [↑] [→] [↓] [20]
 
 Notes:
   - mode is often used as Hypershift (hold for secondary layer)
-  - thumb is labeled 20 (hyperesponse thumb key; default Space)
-  - key_20 remains a valid binding id in profiles / combo lists
+  - key 20 is the hyperesponse thumb key (default Space), not a fifth keypad key
+  - the bottom keypad row is keys 16–19 only
 """.strip()
 
 
@@ -112,9 +119,56 @@ def short_label(logical: str) -> str:
         "scroll_click": "Scr•",
         "mode": "mode",
         "thumb": "20",
+        "key_20": "20",
     }
     if logical in aliases:
         return aliases[logical]
     if logical.startswith("key_"):
         return logical.replace("key_", "")
     return logical
+
+
+def canonical_logical(name: str) -> str:
+    """Map legacy ids onto the current logical name (``thumb`` → ``key_20``)."""
+    return LOGICAL_ALIASES.get(name, name)
+
+
+def describe_logical(logical: str) -> str:
+    """Human label for editors and tooltips."""
+    name = canonical_logical(logical)
+    if name == "key_20":
+        return "key 20 (thumb)"
+    return name
+
+
+def lookup_binding(bindings: dict[str, Any], logical: str) -> Any | None:
+    """Read a binding, treating the legacy ``thumb`` id as key 20.
+
+    When both names are present, ``thumb`` wins: that entry was wired to the
+    physical spacebar, while the old ``key_20`` entry was a phantom keypad key.
+    """
+    if not isinstance(bindings, dict):
+        return None
+    canon = canonical_logical(logical)
+    if canon == "key_20" and "thumb" in bindings:
+        return bindings["thumb"]
+    if canon in bindings:
+        return bindings[canon]
+    return None
+
+
+def fold_thumb_alias(profile: dict[str, Any]) -> dict[str, Any]:
+    """Store key 20 once. The legacy ``thumb`` name is not a separate key."""
+    hs = profile.get("hypershift_key")
+    if isinstance(hs, str):
+        profile["hypershift_key"] = canonical_logical(hs)
+    for layer_name in ("standard", "hypershift"):
+        layer = profile.get(layer_name)
+        if not isinstance(layer, dict):
+            continue
+        bindings = layer.get("bindings")
+        if not isinstance(bindings, dict):
+            continue
+        if "thumb" in bindings:
+            bindings["key_20"] = bindings.pop("thumb")
+    return profile

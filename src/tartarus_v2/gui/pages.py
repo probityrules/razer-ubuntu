@@ -13,7 +13,7 @@ from tartarus_v2.gui.controllers import (
     ProfilesController,
 )
 from tartarus_v2.gui.workers import run_in_thread
-from tartarus_v2.input.keys import ALL_LOGICAL_KEYS
+from tartarus_v2.input.keys import ALL_LOGICAL_KEYS, describe_logical
 
 
 def _toast(window: Any, message: str) -> None:
@@ -627,7 +627,7 @@ def build_bindings_page(window: Any) -> Any:
                 normal_entry.set_text("")
                 hs_entry.set_text("")
                 return
-            selected_row.set_subtitle(logical)
+            selected_row.set_subtitle(describe_logical(logical))
 
             def _as_text(value: Any) -> str:
                 if value is None:
@@ -655,7 +655,7 @@ def build_bindings_page(window: Any) -> Any:
         state["selected"] = logical
         keymap._keymap_set_selected(logical)  # noqa: SLF001
         _fill_entries_for(logical)
-        status.set_subtitle(f"Editing {logical}")
+        status.set_subtitle(f"Editing {describe_logical(logical)}")
 
     keymap = build_keymap_grid(_select_physical)
 

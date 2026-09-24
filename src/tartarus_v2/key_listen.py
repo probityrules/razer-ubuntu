@@ -9,7 +9,12 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from tartarus_v2.input.keys import CODE_TO_LOGICAL, LOGICAL_TO_CODE
+from tartarus_v2.input.keys import (
+    CODE_TO_LOGICAL,
+    LOGICAL_TO_CODE,
+    canonical_logical,
+    lookup_binding,
+)
 from tartarus_v2.profiles import get_active_profile_name, load_profile
 
 log = logging.getLogger("tartarus_v2.key_listen")
@@ -68,7 +73,7 @@ def binding_for_logical(profile: dict[str, Any], logical: str, *, hypershift: bo
     layer_name = "hypershift" if hypershift else "standard"
     layer = profile.get(layer_name) or {}
     bindings = layer.get("bindings") or {}
-    return bindings.get(logical)
+    return lookup_binding(bindings, logical)
 
 
 def describe_press(
@@ -83,8 +88,8 @@ def describe_press(
     layer = "hypershift" if hypershift_held else "standard"
     mapping = "(unknown logical — update LOGICAL_TO_CODE)"
     if logical != "?":
-        hs_key = profile.get("hypershift_key") or "mode"
-        if logical == hs_key:
+        hs_key = canonical_logical(str(profile.get("hypershift_key") or "mode"))
+        if canonical_logical(logical) == hs_key:
             mapping = f"(hypershift modifier: {hs_key})"
         else:
             mapping = format_binding(binding_for_logical(profile, logical, hypershift=hypershift_held))
@@ -358,7 +363,8 @@ class LiveKeyMonitor:
             code = int(event.code)
 
             if self._mode == "virtual":
-                hs_code = LOGICAL_TO_CODE.get(self._profile.get("hypershift_key") or "mode")
+                hs_name = canonical_logical(str(self._profile.get("hypershift_key") or "mode"))
+                hs_code = LOGICAL_TO_CODE.get(hs_name)
                 if hs_code is not None and code == hs_code:
                     self._hypershift = pressed
                 line = describe_virtual_press(
@@ -370,8 +376,8 @@ class LiveKeyMonitor:
                 )
             else:
                 logical = CODE_TO_LOGICAL.get(code)
-                hs_key = self._profile.get("hypershift_key") or "mode"
-                if logical == hs_key:
+                hs_key = canonical_logical(str(self._profile.get("hypershift_key") or "mode"))
+                if logical is not None and canonical_logical(logical) == hs_key:
                     self._hypershift = pressed
                 line = describe_press(
                     code,
@@ -410,7 +416,7 @@ class LiveKeyMonitor:
 
 def hypershift_keycode(profile: dict[str, Any] | None = None) -> int | None:
     data = profile or {}
-    logical = data.get("hypershift_key") or "mode"
+    logical = canonical_logical(str(data.get("hypershift_key") or "mode"))
     return LOGICAL_TO_CODE.get(logical)
 
 
@@ -463,9 +469,13 @@ def logicals_for_output_code(profile: dict[str, Any], code: int, *, hypershift: 
     layer_name = "hypershift" if hypershift else "standard"
     bindings = ((profile.get(layer_name) or {}).get("bindings")) or {}
     hits: list[str] = []
+    seen: set[str] = set()
     for logical, binding in bindings.items():
         if code in _resolve_binding_codes(binding):
-            hits.append(str(logical))
+            name = canonical_logical(str(logical))
+            if name not in seen:
+                seen.add(name)
+                hits.append(name)
     if not hits:
         passthrough = CODE_TO_LOGICAL.get(code)
         if passthrough and passthrough not in bindings:
@@ -578,16 +588,17 @@ class KeyHighlightMonitor:
         if mode == "physical":
             logical = CODE_TO_LOGICAL.get(code)
             if logical:
-                hs_key = self._profile.get("hypershift_key") or "mode"
-                if logical == hs_key:
+                hs_key = canonical_logical(str(self._profile.get("hypershift_key") or "mode"))
+                if canonical_logical(logical) == hs_key:
                     self._hypershift = pressed
-                logicals = [logical]
+                logicals = [canonical_logical(logical)]
         else:
             logicals = logicals_for_output_code(
                 self._profile, code, hypershift=self._hypershift
             )
             # Also treat hypershift modifier if the virtual device emits it.
-            hs_code = LOGICAL_TO_CODE.get(self._profile.get("hypershift_key") or "mode")
+            hs_name = canonical_logical(str(self._profile.get("hypershift_key") or "mode"))
+            hs_code = LOGICAL_TO_CODE.get(hs_name)
             if hs_code is not None and code == hs_code:
                 self._hypershift = pressed
 
