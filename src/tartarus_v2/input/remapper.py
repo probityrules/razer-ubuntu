@@ -93,7 +93,8 @@ class Remapper:
                     dev = evdev.InputDevice(path)
                 except OSError:
                     continue
-                if "tartarus" in (dev.name or "").lower():
+                # Never remap our own uinput device — only the physical keypad.
+                if self._is_physical_tartarus(dev):
                     found.append(dev)
             return found
 
@@ -103,6 +104,18 @@ class Remapper:
             except OSError as exc:
                 log.warning("Could not open %s: %s", link, exc)
         return found
+
+    @staticmethod
+    def _is_physical_tartarus(dev: Any) -> bool:
+        name = (getattr(dev, "name", None) or "").strip()
+        lower = name.lower()
+        if "tartarus" not in lower:
+            return False
+        if "virtual" in lower:
+            return False
+        if name == "Tartarus V2 Virtual Keyboard":
+            return False
+        return True
 
     def start(self) -> None:
         evdev = self._require_evdev()
@@ -124,18 +137,34 @@ class Remapper:
 
         self._ui = UInput(caps, name="Tartarus V2 Virtual Keyboard", version=0x1)
         self._devices = devices
+        grabbed = 0
         for d in self._devices:
             try:
                 d.grab()
-                log.info("Grabbed %s (%s)", d.name, d.path)
+                grabbed += 1
+                log.info("Grabbed %s (%s) — system-wide remap active for this node", d.name, d.path)
             except OSError as exc:
                 log.error("Failed to grab %s: %s", d.path, exc)
-                raise
+                # Without exclusive grab, stock HID still reaches apps (looks like
+                # "in-game only" remaps). Fail hard so the daemon does not pretend
+                # to be remapping system-wide.
+                self.stop()
+                raise RuntimeError(
+                    f"Could not exclusive-grab {d.path} ({d.name}): {exc}. "
+                    "Remapping cannot be system-wide without grab. "
+                    "Run: tartarus-v2 fix-permissions  (then log out/in), "
+                    "and ensure no other process has the device open."
+                ) from exc
+
+        if grabbed == 0:
+            self.stop()
+            raise RuntimeError("No Tartarus devices were grabbed; remapper aborted.")
 
         self._running = True
         log.info(
-            "Remapper started; hypershift_key=%r",
+            "Remapper started (system-wide uinput); hypershift_key=%r devices=%d",
             self.profile.get("hypershift_key"),
+            grabbed,
         )
 
     def stop(self) -> None:

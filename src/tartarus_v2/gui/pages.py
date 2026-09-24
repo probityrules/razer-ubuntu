@@ -549,8 +549,10 @@ def build_bindings_page(window: Any) -> Any:
     group = Adw.PreferencesGroup(
         title="Edit binding",
         description=(
-            "Changes stay in a draft until you press Apply — then all keys are "
-            "written and the daemon reloads."
+            "Remaps are system-wide: the remap daemon exclusive-grabs the keypad "
+            "and emits a virtual keyboard to every app — not only this window. "
+            "Key highlight here is a preview. Apply writes the profile; if the "
+            "daemon is off it will be started so remaps take effect immediately."
         ),
     )
 
@@ -601,7 +603,7 @@ def build_bindings_page(window: Any) -> Any:
         state["dirty"] = dirty
         apply_btn.set_sensitive(dirty)
         apply_btn.set_tooltip_text(
-            "Save all draft bindings and reload the daemon"
+            "Save all draft bindings and run the system-wide remap daemon"
             if dirty
             else "No pending binding changes"
         )
@@ -794,6 +796,8 @@ def build_bindings_page(window: Any) -> Any:
         try:
             import copy
 
+            from tartarus_v2.gui.controllers import DaemonController
+
             draft = state["draft"]
             profile = state["profile"]
             hs_key = draft.get("hypershift_key") or keys[hs_row.get_selected()]
@@ -806,17 +810,44 @@ def build_bindings_page(window: Any) -> Any:
             state["draft"] = copy.deepcopy(data)
             state["draft"]["name"] = profile
             state["baseline"] = copy.deepcopy(state["draft"])
-            detail = ctrl.apply_bindings()
             _set_dirty(False)
-            _refresh_header_daemon(window)
-            if "not running" in detail.lower():
-                _toast(window, "Bindings saved; start the daemon to use them")
-            elif "signaled" in detail.lower() or "reload" in detail.lower():
-                _toast(window, "Applied — all bindings saved, daemon reloaded")
+
+            daemon_ctrl = DaemonController()
+            st = daemon_ctrl.daemon_status()
+            if not st.running:
+                # Bindings on disk do nothing until the system-wide remapper runs.
+                st = daemon_ctrl.start_daemon()
+                _refresh_header_daemon(window)
+                if not st.running:
+                    _error(
+                        window,
+                        "Bindings saved, but remap daemon did not start",
+                        st.detail
+                        + "\n\nWithout the daemon, keys stay stock HID everywhere "
+                        "(the Bindings preview is not a system remapper). "
+                        "Try Daemon → Start, or: tartarus-v2 fix-permissions",
+                    )
+                    status.set_subtitle("Saved — daemon not running (no system remap)")
+                    _sync_keymap()
+                    return
+                _toast(
+                    window,
+                    "Applied — bindings saved; remap daemon started (system-wide)",
+                )
+                status.set_subtitle("Applied — daemon started (system-wide remap)")
             else:
-                _toast(window, f"Applied ({detail})")
-            status.set_subtitle(f"Applied ({detail})")
+                detail = ctrl.apply_bindings()
+                _refresh_header_daemon(window)
+                if "signaled" in detail.lower() or "reload" in detail.lower():
+                    _toast(
+                        window,
+                        "Applied — bindings saved; daemon reloaded (system-wide)",
+                    )
+                else:
+                    _toast(window, f"Applied ({detail})")
+                status.set_subtitle(f"Applied ({detail})")
             _sync_keymap()
+            _start_highlight()
         except Exception as exc:  # noqa: BLE001
             _error(window, "Could not apply bindings", str(exc))
 
@@ -866,7 +897,7 @@ def build_bindings_page(window: Any) -> Any:
 
     apply_row = Adw.ActionRow(
         title="Apply all",
-        subtitle="Write every draft binding and reload the running daemon",
+        subtitle="Save bindings and ensure the system-wide remap daemon is running",
     )
     apply_btn.connect("clicked", _apply)
     apply_row.add_suffix(apply_btn)
@@ -926,7 +957,11 @@ def build_daemon_page(window: Any) -> Any:
 
     group = Adw.PreferencesGroup(
         title="Remap daemon",
-        description="CLI: tartarus-v2 daemon (subprocess)",
+        description=(
+            "System-wide driver: exclusive-grabs the Tartarus and injects a "
+            "virtual keyboard for every app. LED green = remaps are live; "
+            "LED grey = stock HID only (Bindings preview still works)."
+        ),
     )
     status_row = Adw.ActionRow(title="Status", subtitle="Unknown")
     debug_switch = Gtk.Switch()

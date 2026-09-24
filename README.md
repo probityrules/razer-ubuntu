@@ -99,6 +99,16 @@ tartarus-v2 profile list
 tartarus-v2 gui
 ```
 
+## How remapping works (system-wide)
+
+Editing keys on the **Bindings** page only updates the profile JSON and a **preview** highlight. Remaps reach Notepad, browsers, games, etc. **only while the remap daemon is running** (header LED green):
+
+1. Daemon **exclusive-grabs** the physical Tartarus (`EVIOCGRAB`) so stock HID keys no longer go to apps.
+2. It applies the **active** profile bindings.
+3. It emits keys via **uinput** as `Tartarus V2 Virtual Keyboard` — visible to the whole desktop session.
+
+If the LED is grey, presses are still stock firmware layout everywhere (the GUI can still light up keys as a preview). **Apply** on Bindings saves the profile and starts the daemon if needed. Also enable **Start at login** on the Daemon page, and run `tartarus-v2 fix-permissions` if grab fails.
+
 ## Hypershift
 
 Each profile has `hypershift_key`, `standard.bindings`, and `hypershift.bindings`. Edit in the GUI Bindings page or JSON under `~/.cache/tartarus-v2/profiles/`.

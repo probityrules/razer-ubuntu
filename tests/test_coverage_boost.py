@@ -213,7 +213,20 @@ def test_short_label_keys() -> None:
     assert "mode" in flat
 
 
-def test_logicals_for_output_code() -> None:
+def test_remapper_skips_virtual_keyboard_device() -> None:
+    from types import SimpleNamespace
+
+    from tartarus_v2.input.remapper import Remapper
+
+    assert Remapper._is_physical_tartarus(  # noqa: SLF001
+        SimpleNamespace(name="Razer Tartarus V2")
+    )
+    assert not Remapper._is_physical_tartarus(  # noqa: SLF001
+        SimpleNamespace(name="Tartarus V2 Virtual Keyboard")
+    )
+    assert not Remapper._is_physical_tartarus(  # noqa: SLF001
+        SimpleNamespace(name="Some Other Keyboard")
+    )
     from tartarus_v2 import key_listen
 
     profile = {
