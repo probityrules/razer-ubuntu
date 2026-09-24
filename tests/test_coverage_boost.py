@@ -279,15 +279,16 @@ def test_key_listen_describe_and_format() -> None:
         "standard": {"bindings": {"key_02": "w", "key_16": "ctrl"}},
         "hypershift": {"bindings": {"key_02": "F2"}},
     }
+    # Physical key 02 emits KEY_2 (code 3).
     line = key_listen.describe_press(
-        16, pressed=True, profile=profile, hypershift_held=False, ecodes=None
+        3, pressed=True, profile=profile, hypershift_held=False, ecodes=None
     )
     assert line.logical == "key_02"
     assert line.mapping == "w"
     assert "DOWN" in key_listen.format_key_line(line)
 
     hs = key_listen.describe_press(
-        16, pressed=True, profile=profile, hypershift_held=True, ecodes=None
+        3, pressed=True, profile=profile, hypershift_held=True, ecodes=None
     )
     assert hs.mapping == "F2"
     assert key_listen.format_binding({"type": "macro", "steps": [{"tap": "a"}]}) == "macro(a)"
@@ -304,6 +305,42 @@ def test_key_listen_describe_and_format() -> None:
     )
     assert virt.pressed
     assert "virtual" in virt.mapping
+
+
+def test_evdev_key_calibration_matches_hardware() -> None:
+    """Physical EV_KEY codes from live evtest on Tartarus V2."""
+    from tartarus_v2.input.keys import CODE_TO_LOGICAL, LOGICAL_TO_CODE
+
+    expected = {
+        "key_01": 2,
+        "key_02": 3,
+        "key_03": 4,
+        "key_04": 5,
+        "key_05": 6,
+        "key_06": 15,
+        "key_07": 16,
+        "key_08": 17,
+        "key_09": 18,
+        "key_10": 19,
+        "key_11": 58,
+        "key_12": 30,
+        "key_13": 31,
+        "key_14": 32,
+        "key_15": 33,
+        "key_16": 42,
+        "key_17": 44,
+        "key_18": 45,
+        "key_19": 46,
+        "key_20": 57,
+        "mode": 56,
+        "stick_left": 105,
+        "stick_up": 103,
+        "stick_right": 106,
+        "stick_down": 108,
+    }
+    for logical, code in expected.items():
+        assert LOGICAL_TO_CODE[logical] == code, logical
+        assert CODE_TO_LOGICAL[code] == logical, code
 
 
 def test_session_groups_ignore_database_until_relogin(monkeypatch: pytest.MonkeyPatch) -> None:
