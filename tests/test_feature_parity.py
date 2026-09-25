@@ -45,3 +45,20 @@ def test_tray_menu_actions() -> None:
     ctrl = TrayController()
     for name in ids:
         assert hasattr(ctrl, name), name
+
+
+def test_tray_status_text() -> None:
+    from tartarus_v2.gui.tray import tray_status_text
+
+    label, tip = tray_status_text(profile="default", daemon_running=True)
+    assert label == "default"
+    assert "default" in tip and "ON" in tip
+
+    label_off, tip_off = tray_status_text(profile="arena", daemon_running=False)
+    assert label_off == "arena"
+    assert "OFF" in tip_off
+
+    long_name = "a" * 20
+    short, _ = tray_status_text(profile=long_name, daemon_running=True)
+    assert short.endswith("…")
+    assert len(short) == 16

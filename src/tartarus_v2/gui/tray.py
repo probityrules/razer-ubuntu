@@ -10,6 +10,22 @@ from tartarus_v2.gui.gi_check import try_appindicator
 
 log = logging.getLogger("tartarus_v2.gui.tray")
 
+# Guide string so the panel reserves a stable width for the profile label.
+_LABEL_GUIDE = "WWWWWWWWWWWWWWWW"
+
+
+def tray_status_text(*, profile: str | None, daemon_running: bool) -> tuple[str, str]:
+    """Return (panel_label, tooltip) for the tray indicator.
+
+    The panel label is the active profile name (language-indicator style).
+    Tooltip carries daemon state for hosts that hide the label.
+    """
+    name = (profile or "").strip() or "—"
+    label = name if len(name) <= 16 else name[:15] + "…"
+    state = "ON" if daemon_running else "OFF"
+    tip = f"Tartarus V2 · profile {name} · remap {state}"
+    return label, tip
+
 
 class TrayController:
     """Menu action ids used by parity tests and the live indicator."""
@@ -89,6 +105,14 @@ def attach_tray(
     indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
 
     menu = Gtk.Menu()
+    status_item = Gtk.MenuItem(label="Profile: —")
+    status_item.set_sensitive(False)
+    menu.append(status_item)
+    status_item.show()
+
+    sep = Gtk.SeparatorMenuItem()
+    menu.append(sep)
+    sep.show()
 
     def add_item(label: str, callback: Callable) -> None:
         item = Gtk.MenuItem(label=label)
@@ -96,12 +120,61 @@ def attach_tray(
         menu.append(item)
         item.show()
 
+    def refresh_tray() -> None:
+        try:
+            from tartarus_v2.daemon_control import status as daemon_status
+            from tartarus_v2.profiles import get_active_profile_name
+
+            name = get_active_profile_name()
+            running = bool(daemon_status().running)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Tray status refresh failed: %s", exc)
+            name = "—"
+            running = False
+        label, tip = tray_status_text(profile=name, daemon_running=running)
+        try:
+            indicator.set_label(label, _LABEL_GUIDE)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("set_label unsupported: %s", exc)
+        try:
+            indicator.set_title(tip)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("set_title unsupported: %s", exc)
+        try:
+            status_item.set_label(
+                f"Profile: {name} · daemon {'ON' if running else 'OFF'}"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
     add_item("Show Tartarus V2", on_show)
-    add_item("Start daemon", lambda: ctrl.start_daemon())
-    add_item("Stop daemon", lambda: ctrl.stop_daemon())
+
+    def start_daemon() -> None:
+        ctrl.start_daemon()
+        refresh = getattr(window, "refresh_header_daemon", None)
+        if callable(refresh):
+            refresh()
+        else:
+            refresh_tray()
+
+    def stop_daemon() -> None:
+        ctrl.stop_daemon()
+        refresh = getattr(window, "refresh_header_daemon", None)
+        if callable(refresh):
+            refresh()
+        else:
+            refresh_tray()
+
+    add_item("Start daemon", start_daemon)
+    add_item("Stop daemon", stop_daemon)
 
     def next_profile() -> None:
         name = ctrl.cycle_profile_next()
+        refresh = getattr(window, "refresh_header_daemon", None)
+        if callable(refresh):
+            refresh()
+        else:
+            refresh_tray()
         try:
             from gi.repository import Adw
 
@@ -158,5 +231,19 @@ def attach_tray(
     add_item("Quit", on_quit)
     menu.show_all()
     indicator.set_menu(menu)
+
+    # Keep panel label in sync with the header LED poll / profile switches.
+    prev_refresh = getattr(window, "refresh_header_daemon", None)
+
+    def refresh_header_and_tray() -> None:
+        if callable(prev_refresh):
+            prev_refresh()
+        refresh_tray()
+
+    window.refresh_header_daemon = refresh_header_and_tray  # noqa: SLF001
+    window.refresh_tray = refresh_tray  # noqa: SLF001
+    refresh_tray()
+
     app._tray_controller = ctrl  # noqa: SLF001
+    app._tray_indicator = indicator  # noqa: SLF001
     return indicator
