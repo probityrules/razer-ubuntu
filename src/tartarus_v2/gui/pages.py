@@ -15,7 +15,10 @@ from tartarus_v2.gui.controllers import (
 from tartarus_v2.gui.workers import run_in_thread
 from tartarus_v2.input.keys import (
     ALL_LOGICAL_KEYS,
+    binding_picker_choices,
     describe_logical,
+    format_binding_for_entry,
+    parse_binding_from_entry,
     strip_hypershift_key_bindings,
 )
 
@@ -683,12 +686,12 @@ def build_bindings_page(window: Any) -> Any:
     hs_row.set_model(Gtk.StringList.new(keys))
 
     selected_row = Adw.ActionRow(title="Selected key", subtitle="Click a key on the layout")
-    normal_entry = Gtk.Entry(placeholder_text="Normal binding, e.g. a  or  ctrl+c")
+    normal_entry = Gtk.Entry(placeholder_text="Type a key, chord (ctrl+c), or Insert…")
+    normal_entry.set_hexpand(True)
     normal_row = Adw.ActionRow(title="Normal")
-    normal_row.add_suffix(normal_entry)
-    hs_entry = Gtk.Entry(placeholder_text="Hypershift binding, e.g. F1")
+    hs_entry = Gtk.Entry(placeholder_text="Type a key, chord, or Insert…")
+    hs_entry.set_hexpand(True)
     hs_entry_row = Adw.ActionRow(title="Hypershift")
-    hs_entry_row.add_suffix(hs_entry)
 
     state: dict[str, Any] = {
         "profile": None,
@@ -701,6 +704,51 @@ def build_bindings_page(window: Any) -> Any:
     }
     suppress_profile: dict[str, bool] = {"busy": False}
     highlight: dict[str, Any] = {"monitor": None}
+    suppress_picker: dict[str, bool] = {"busy": False}
+
+    picker_choices = binding_picker_choices()
+    picker_labels = [label for label, _value in picker_choices]
+    picker_values = [value for _label, value in picker_choices]
+
+    def _attach_binding_picker(row: Any, entry: Any) -> Any:
+        model = Gtk.StringList.new(picker_labels)
+        dropdown = Gtk.DropDown(model=model)
+        dropdown.set_selected(0)
+        dropdown.set_valign(Gtk.Align.CENTER)
+        dropdown.set_size_request(140, -1)
+        try:
+            dropdown.set_enable_search(True)
+        except AttributeError:
+            pass
+        dropdown.set_tooltip_text("Insert a key, modifier, chord, or action")
+
+        def _on_pick(_dd: Any = None, _pspec: Any = None) -> None:
+            if suppress_picker["busy"] or state["suppress_entries"]:
+                return
+            idx = int(dropdown.get_selected())
+            if idx <= 0 or idx >= len(picker_values):
+                return
+            value = picker_values[idx]
+            if value is None:
+                return
+            entry.set_text(value)
+            suppress_picker["busy"] = True
+            try:
+                dropdown.set_selected(0)
+            finally:
+                suppress_picker["busy"] = False
+
+        dropdown.connect("notify::selected", _on_pick)
+        row.add_suffix(dropdown)
+        row.add_suffix(entry)
+        return dropdown
+
+    normal_picker = _attach_binding_picker(normal_row, normal_entry)
+    hs_picker = _attach_binding_picker(hs_entry_row, hs_entry)
+    normal_entry.set_sensitive(False)
+    hs_entry.set_sensitive(False)
+    normal_picker.set_sensitive(False)
+    hs_picker.set_sensitive(False)
 
     apply_btn = Gtk.Button(label="Apply")
     apply_btn.add_css_class("suggested-action")
@@ -784,30 +832,20 @@ def build_bindings_page(window: Any) -> Any:
                 hs_entry.set_text("")
                 normal_entry.set_sensitive(False)
                 hs_entry.set_sensitive(False)
+                normal_picker.set_sensitive(False)
+                hs_picker.set_sensitive(False)
                 return
             selected_row.set_subtitle(describe_logical(logical))
             normal_entry.set_sensitive(True)
             hs_entry.set_sensitive(True)
-
-            def _as_text(value: Any) -> str:
-                if value is None:
-                    return ""
-                if isinstance(value, str):
-                    return value
-                if isinstance(value, dict):
-                    kind = value.get("type", "key")
-                    if kind == "macro":
-                        steps = value.get("steps") or []
-                        if steps and isinstance(steps[0], dict):
-                            return str(steps[0].get("tap") or "")
-                        return "macro"
-                    if kind == "key":
-                        return str(value.get("key") or value.get("keys") or "")
-                    return str(kind)
-                return str(value)
-
-            normal_entry.set_text(_as_text(_draft_bindings("standard").get(logical)))
-            hs_entry.set_text(_as_text(_draft_bindings("hypershift").get(logical)))
+            normal_picker.set_sensitive(True)
+            hs_picker.set_sensitive(True)
+            normal_entry.set_text(
+                format_binding_for_entry(_draft_bindings("standard").get(logical))
+            )
+            hs_entry.set_text(
+                format_binding_for_entry(_draft_bindings("hypershift").get(logical))
+            )
         finally:
             state["suppress_entries"] = False
 
@@ -935,10 +973,11 @@ def build_bindings_page(window: Any) -> Any:
         data = state["draft"]
         data.setdefault(layer, {})
         bindings = dict((data.get(layer) or {}).get("bindings") or {})
-        if text:
-            bindings[logical] = text
-        else:
+        parsed = parse_binding_from_entry(text)
+        if parsed is None:
             bindings.pop(logical, None)
+        else:
+            bindings[logical] = parsed
         data[layer]["bindings"] = strip_hypershift_key_bindings(bindings, hs_key)
         _sync_keymap()
         _set_dirty(True)

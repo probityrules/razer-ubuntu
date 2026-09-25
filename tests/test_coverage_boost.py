@@ -303,6 +303,27 @@ def test_short_label_keys() -> None:
     assert cleaned["key_01"] == "1"
     assert strip_hypershift_key_bindings({"key_20": "a", "thumb": "b"}, "key_20") == {}
 
+    from tartarus_v2.input.keys import (
+        binding_picker_choices,
+        format_binding_for_entry,
+        parse_binding_from_entry,
+    )
+
+    choices = binding_picker_choices()
+    assert choices[0] == ("Insert…", None)
+    assert ("Clear binding", "") in choices
+    assert ("ctrl", "ctrl") in choices
+    assert ("F1", "F1") in choices
+    assert ("ctrl+c", "ctrl+c") in choices
+    assert ("Profile next", "profile_next") in choices
+    assert parse_binding_from_entry("") is None
+    assert parse_binding_from_entry("  ctrl+c ") == "ctrl+c"
+    assert parse_binding_from_entry("profile_next") == {"type": "profile_next"}
+    assert parse_binding_from_entry("PROFILE_PREV") == {"type": "profile_prev"}
+    assert format_binding_for_entry({"type": "profile_next"}) == "profile_next"
+    assert format_binding_for_entry("a") == "a"
+    assert format_binding_for_entry({"type": "macro", "steps": [{"tap": "ctrl+v"}]}) == "ctrl+v"
+
 
 def test_remapper_skips_virtual_keyboard_device() -> None:
     from types import SimpleNamespace

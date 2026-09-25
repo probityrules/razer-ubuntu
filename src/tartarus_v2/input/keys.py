@@ -189,3 +189,116 @@ def strip_hypershift_key_bindings(
     elif hypershift_key != canon:
         out.pop(hypershift_key, None)
     return out
+
+
+# Special action tokens the remapper handles as dict bindings (not KEY_* names).
+BINDING_ACTION_TOKENS: dict[str, dict[str, str]] = {
+    "profile_next": {"type": "profile_next"},
+    "profile_prev": {"type": "profile_prev"},
+}
+
+
+def format_binding_for_entry(value: Any) -> str:
+    """Flatten a profile binding value into editable entry text."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        kind = value.get("type", "key")
+        if kind in BINDING_ACTION_TOKENS:
+            return str(kind)
+        if kind == "macro":
+            steps = value.get("steps") or []
+            if steps and isinstance(steps[0], dict):
+                return str(steps[0].get("tap") or "")
+            return "macro"
+        if kind == "key":
+            return str(value.get("key") or value.get("keys") or "")
+        return str(kind)
+    return str(value)
+
+
+def parse_binding_from_entry(text: str) -> Any | None:
+    """Parse entry text into a profile binding value.
+
+    Empty → ``None`` (clear). ``profile_next`` / ``profile_prev`` → action
+    dicts. Everything else stays a string (letters, aliases, ``ctrl+c`` chords).
+    """
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+    lower = cleaned.lower()
+    if lower in BINDING_ACTION_TOKENS:
+        return dict(BINDING_ACTION_TOKENS[lower])
+    return cleaned
+
+
+def binding_picker_choices() -> list[tuple[str, str | None]]:
+    """Labels and values for the Bindings Insert dropdown.
+
+    First row is a no-op placeholder (``None``). ``\"\"`` clears the binding.
+    Other values are tokens suitable for :func:`parse_binding_from_entry`.
+    """
+    items: list[tuple[str, str | None]] = [
+        ("Insert…", None),
+        ("Clear binding", ""),
+        ("Profile next", "profile_next"),
+        ("Profile previous", "profile_prev"),
+    ]
+
+    modifiers = (
+        "ctrl",
+        "shift",
+        "alt",
+        "super",
+        "rctrl",
+        "rshift",
+        "ralt",
+        "tab",
+        "esc",
+        "enter",
+        "space",
+        "backspace",
+        "up",
+        "down",
+        "left",
+        "right",
+    )
+    for name in modifiers:
+        items.append((name, name))
+
+    for ch in "abcdefghijklmnopqrstuvwxyz":
+        items.append((ch, ch))
+    for ch in "0123456789":
+        items.append((ch, ch))
+    for n in range(1, 25):
+        items.append((f"F{n}", f"F{n}"))
+
+    chords = (
+        "ctrl+c",
+        "ctrl+v",
+        "ctrl+x",
+        "ctrl+z",
+        "ctrl+a",
+        "ctrl+s",
+        "ctrl+f",
+        "alt+tab",
+        "ctrl+shift+esc",
+        "super+tab",
+    )
+    for chord in chords:
+        items.append((chord, chord))
+
+    media = (
+        "mute",
+        "volumeup",
+        "volumedown",
+        "playpause",
+        "nextsong",
+        "previoussong",
+    )
+    for name in media:
+        items.append((name, name))
+
+    return items
