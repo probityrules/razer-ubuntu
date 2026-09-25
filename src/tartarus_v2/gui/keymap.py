@@ -7,6 +7,56 @@ from typing import Any, Callable
 from tartarus_v2.input.keys import KEYMAP_LAYOUT, describe_logical, short_label
 
 _UNSET = object()
+_CSS_LOADED = False
+
+_KEYMAP_CSS = b"""
+button.keymap-key {
+  min-width: 88px;
+  min-height: 72px;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+button.keymap-key label.keymap-name {
+  font-weight: 700;
+  font-size: 0.95em;
+}
+button.keymap-key label.keymap-n {
+  color: #3584e4;
+  font-size: 0.78em;
+  font-weight: 600;
+}
+button.keymap-key label.keymap-h {
+  color: #e66100;
+  font-size: 0.78em;
+  font-weight: 600;
+}
+button.keymap-key label.keymap-hs {
+  color: #9a9996;
+  font-size: 0.85em;
+  font-weight: 700;
+}
+button.keymap-key:disabled {
+  opacity: 0.55;
+}
+"""
+
+
+def _ensure_keymap_css() -> None:
+    global _CSS_LOADED
+    if _CSS_LOADED:
+        return
+    from gi.repository import Gdk, Gtk
+
+    provider = Gtk.CssProvider()
+    provider.load_from_data(_KEYMAP_CSS)
+    display = Gdk.Display.get_default()
+    if display is not None:
+        Gtk.StyleContext.add_provider_for_display(
+            display,
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+    _CSS_LOADED = True
 
 
 def _format_binding(value: Any) -> str:
@@ -40,7 +90,9 @@ def build_keymap_grid(
     hypershift_key: str | None = None,
 ) -> Any:
     """Return a Gtk.Box grid; each cell shows id + Normal/Hypershift bindings."""
-    from gi.repository import Gtk
+    from gi.repository import Gtk, Pango
+
+    _ensure_keymap_css()
 
     outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
     outer.set_margin_start(12)
@@ -54,7 +106,7 @@ def build_keymap_grid(
     outer.append(title)
 
     hint = Gtk.Label(
-        label="Click a key to edit. N = Normal, H = Hypershift. HS key is reserved."
+        label="Click a key to edit. N = Normal (blue), H = Hypershift (orange). HS key is reserved."
     )
     hint.add_css_class("dim-label")
     hint.set_wrap(True)
@@ -74,13 +126,6 @@ def build_keymap_grid(
     def _is_hs(logical: str) -> bool:
         return bool(hs_key) and logical == hs_key
 
-    def _cell_label(logical: str) -> str:
-        if _is_hs(logical):
-            return f"{short_label(logical)}\nHS"
-        n = _format_binding(std.get(logical))
-        h = _format_binding(hs.get(logical))
-        return f"{short_label(logical)}\nN:{n}\nH:{h}"
-
     def _style_cell(logical: str) -> None:
         info = cells.get(logical)
         if info is None:
@@ -88,7 +133,6 @@ def build_keymap_grid(
         btn = info["button"]
         btn.remove_css_class("suggested-action")
         btn.remove_css_class("destructive-action")
-        btn.remove_css_class("opaque")
         reserved = _is_hs(logical)
         btn.set_sensitive(not reserved)
         if reserved:
@@ -98,19 +142,33 @@ def build_keymap_grid(
         elif selected_name is not None and logical == selected_name:
             btn.add_css_class("suggested-action")
 
+    def _refresh_cell(logical: str) -> None:
+        info = cells.get(logical)
+        if info is None:
+            return
+        info["name"].set_label(short_label(logical))
+        if _is_hs(logical):
+            info["n"].set_visible(False)
+            info["h"].set_visible(False)
+            info["reserved"].set_visible(True)
+            tip = f"{describe_logical(logical)}\nReserved as Hypershift modifier"
+        else:
+            info["reserved"].set_visible(False)
+            info["n"].set_visible(True)
+            info["h"].set_visible(True)
+            info["n"].set_label(f"N:{_format_binding(std.get(logical))}")
+            info["h"].set_label(f"H:{_format_binding(hs.get(logical))}")
+            tip = (
+                f"{describe_logical(logical)}\n"
+                f"Normal → {_format_binding(std.get(logical))}\n"
+                f"Hypershift → {_format_binding(hs.get(logical))}"
+            )
+        info["button"].set_tooltip_text(tip)
+        _style_cell(logical)
+
     def _refresh_all() -> None:
-        for logical, info in cells.items():
-            info["button"].set_label(_cell_label(logical))
-            if _is_hs(logical):
-                tip = f"{describe_logical(logical)}\nReserved as Hypershift modifier"
-            else:
-                tip = (
-                    f"{describe_logical(logical)}\n"
-                    f"Normal → {_format_binding(std.get(logical))}\n"
-                    f"Hypershift → {_format_binding(hs.get(logical))}"
-                )
-            info["button"].set_tooltip_text(tip)
-            _style_cell(logical)
+        for logical in cells:
+            _refresh_cell(logical)
 
     for r, row in enumerate(KEYMAP_LAYOUT):
         for c, logical in enumerate(row):
@@ -120,10 +178,40 @@ def build_keymap_grid(
                 grid.attach(spacer, c, r, 1, 1)
                 continue
 
-            btn = Gtk.Button(label=_cell_label(logical))
-            btn.set_size_request(88, 64)
-            btn.add_css_class("flat")
+            btn = Gtk.Button()
+            btn.set_size_request(88, 72)
             btn.add_css_class("keymap-key")
+
+            stack = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+            stack.set_halign(Gtk.Align.CENTER)
+            stack.set_valign(Gtk.Align.CENTER)
+
+            name_lbl = Gtk.Label(label=short_label(logical))
+            name_lbl.add_css_class("keymap-name")
+            name_lbl.set_halign(Gtk.Align.CENTER)
+
+            n_lbl = Gtk.Label(label="N:—")
+            n_lbl.add_css_class("keymap-n")
+            n_lbl.set_halign(Gtk.Align.CENTER)
+            n_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            n_lbl.set_max_width_chars(10)
+
+            h_lbl = Gtk.Label(label="H:—")
+            h_lbl.add_css_class("keymap-h")
+            h_lbl.set_halign(Gtk.Align.CENTER)
+            h_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            h_lbl.set_max_width_chars(10)
+
+            reserved_lbl = Gtk.Label(label="HS")
+            reserved_lbl.add_css_class("keymap-hs")
+            reserved_lbl.set_halign(Gtk.Align.CENTER)
+            reserved_lbl.set_visible(False)
+
+            stack.append(name_lbl)
+            stack.append(n_lbl)
+            stack.append(h_lbl)
+            stack.append(reserved_lbl)
+            btn.set_child(stack)
 
             def _clicked(_button: Any, name: str = logical) -> None:
                 nonlocal selected_name
@@ -134,7 +222,13 @@ def build_keymap_grid(
                 on_select(name)
 
             btn.connect("clicked", _clicked)
-            cells[logical] = {"button": btn}
+            cells[logical] = {
+                "button": btn,
+                "name": name_lbl,
+                "n": n_lbl,
+                "h": h_lbl,
+                "reserved": reserved_lbl,
+            }
             grid.attach(btn, c, r, 1, 1)
 
     _refresh_all()
