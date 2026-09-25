@@ -124,6 +124,7 @@ def gather_diagnostics(*, include_probe: bool = False) -> str:
     from datetime import datetime, timezone
 
     from tartarus_v2.diagnose import build_report
+    from tartarus_v2.privacy import redact_report_text
 
     generated = datetime.now(timezone.utc).isoformat()
     try:
@@ -136,7 +137,7 @@ def gather_diagnostics(*, include_probe: bool = False) -> str:
         f"generated_utc={generated}\n"
         f"(fresh snapshot at submit; not a cached Diagnose-page dump)\n"
     )
-    text = header + "\n" + text
+    text = redact_report_text(header + "\n" + text)
     if len(text) > MAX_DIAGNOSTICS_CHARS:
         text = text[:MAX_DIAGNOSTICS_CHARS] + "\n\n…(truncated)…"
     return text
@@ -154,17 +155,19 @@ def _flush_logging() -> None:
 
 def gather_log_tail(limit: int = 200) -> str:
     """Read recent daemon/GUI log lines from disk (after flushing handlers)."""
+    from tartarus_v2.privacy import redact_report_text
+
     _flush_logging()
     path = log_path()
     try:
         if not path.exists():
-            return f"(no log file yet at {path})"
+            return redact_report_text(f"(no log file yet at {path})")
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         if not lines:
-            return f"(log file empty: {path})"
-        return "\n".join(lines[-limit:])
+            return redact_report_text(f"(log file empty: {path})")
+        return redact_report_text("\n".join(lines[-limit:]))
     except OSError as exc:
-        return f"(could not read {path}: {exc})"
+        return redact_report_text(f"(could not read {path}: {exc})")
 
 
 def _guess_log_level(line: str) -> str:
@@ -187,6 +190,8 @@ def log_tail_as_console(limit: int = MAX_CONSOLE_LINES) -> list[dict[str, Any]]:
     """Convert app log lines into Notefully ``context.console`` entries."""
     import time
 
+    from tartarus_v2.privacy import redact_report_text
+
     raw = gather_log_tail(limit=max(limit, 1))
     now = int(time.time() * 1000)
     entries: list[dict[str, Any]] = []
@@ -205,7 +210,7 @@ def log_tail_as_console(limit: int = MAX_CONSOLE_LINES) -> list[dict[str, Any]]:
         entries.append(
             {
                 "level": "warn",
-                "text": f"No tartarus-v2 log lines found at {log_path()}",
+                "text": redact_report_text(f"No tartarus-v2 log lines found at {log_path()}"),
                 "at": now,
             }
         )
@@ -220,6 +225,8 @@ def build_context(
     log_tail: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from tartarus_v2.privacy import redact_report_text
+
     tail = log_tail if log_tail is not None else gather_log_tail()
     console_lines = console if console is not None else log_tail_as_console()
     ctx: dict[str, Any] = {
@@ -233,7 +240,7 @@ def build_context(
         "app": {
             "name": REPORT_NAME,
             "version": __version__,
-            "logPath": str(log_path()),
+            "logPath": redact_report_text(str(log_path())),
         },
         "user": {
             "userId": None,
@@ -243,10 +250,10 @@ def build_context(
         "author": author or "Anonymous",
         # Notefully delivery / Tracker console panel (widget-compatible shape).
         "console": console_lines,
-        "logTail": tail,
+        "logTail": redact_report_text(tail) if tail else tail,
     }
     if diagnostics is not None:
-        ctx["diagnostics"] = diagnostics
+        ctx["diagnostics"] = redact_report_text(diagnostics)
     if extra:
         ctx.update(extra)
     return ctx

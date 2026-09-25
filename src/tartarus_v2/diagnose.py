@@ -56,10 +56,12 @@ def _read_text(path: Path, limit: int | None = None) -> str:
 
 
 def _header() -> str:
+    from tartarus_v2.privacy import PLACEHOLDER_HOST
+
     lines = [
         f"tool=tartarus-v2 version={__version__}",
         f"utc={datetime.now(timezone.utc).isoformat()}",
-        f"hostname={platform.node()}",
+        f"hostname={PLACEHOLDER_HOST}",
         f"platform={platform.platform()}",
         f"python={platform.python_version()}",
         f"uname={_run(['uname', '-a'])}",
@@ -217,14 +219,18 @@ def _permissions() -> str:
         session_group_names,
         uinput_status,
     )
+    from tartarus_v2.privacy import PLACEHOLDER_USER
 
     user = permission_status().user
     session = sorted(session_group_names())
     database = sorted(database_group_names(user))
+    # Drop the login name from group lists (often listed as the primary group).
+    session = [g if g != user else PLACEHOLDER_USER for g in session]
+    database = [g if g != user else PLACEHOLDER_USER for g in database]
     uinput_ok, uinput_detail = uinput_status()
     st = permission_status()
     lines = [
-        f"user={user}",
+        f"user={PLACEHOLDER_USER}",
         f"session_groups={session}",
         f"database_groups={database}",
         f"in_input={'input' in session}",
@@ -422,8 +428,7 @@ def _live_probe(debug: bool = True) -> str:
             resp = dev.send(req)
             lines.append("RX get_serial:")
             lines.append(annotate_report(resp.to_bytes()))
-            serial = bytes(resp.arguments[:22]).split(b"\x00", 1)[0]
-            lines.append(f"serial={serial!r}")
+            lines.append("serial=<serial>")
 
             req = protocol.get_brightness(C.VARSTORE, C.ZERO_LED)
             req.transaction_id = C.TX_ID_EFFECTS
@@ -496,6 +501,8 @@ def _log_tail() -> str:
 
 
 def build_report(listen_seconds: float = 0.0, skip_probe: bool = False) -> str:
+    from tartarus_v2.privacy import redact_report_text
+
     parts = [
         COPY_FROM,
         _section("1. Header", _header()),
@@ -516,7 +523,7 @@ def build_report(listen_seconds: float = 0.0, skip_probe: bool = False) -> str:
     parts.append(_section("9. Log tail", _log_tail()))
     parts.append(_section("10. Issues / remediation", _issues()))
     parts.append(f"\n{COPY_TO}\n")
-    return "\n".join(parts)
+    return redact_report_text("\n".join(parts))
 
 
 def run_diagnose(args: argparse.Namespace) -> int:

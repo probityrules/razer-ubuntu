@@ -1583,7 +1583,8 @@ def build_diagnose_page(window: Any) -> Any:
 
     group = Adw.PreferencesGroup(
         title="Remote debug dump",
-        description="CLI: tartarus-v2 diagnose — paste between COPY banners",
+        description="CLI: tartarus-v2 diagnose — paste between COPY banners "
+        "(username, hostname, and home paths are redacted)",
     )
 
     skip = Gtk.Switch()

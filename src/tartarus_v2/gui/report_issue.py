@@ -140,7 +140,8 @@ def build_report_issue_dialog(window: Any) -> Any:
     attach_hint = Gtk.Label(
         label=(
             "On submit: fresh diagnose dump (USB/HID/permissions/log) "
-            "+ recent console lines. No screenshots."
+            "+ recent console lines. Username, hostname, and home paths "
+            "are redacted. No screenshots."
         ),
         wrap=True,
         xalign=0.0,
