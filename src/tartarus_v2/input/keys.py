@@ -172,3 +172,20 @@ def fold_thumb_alias(profile: dict[str, Any]) -> dict[str, Any]:
         if "thumb" in bindings:
             bindings["key_20"] = bindings.pop("thumb")
     return profile
+
+
+def strip_hypershift_key_bindings(
+    bindings: dict[str, Any],
+    hypershift_key: str | None,
+) -> dict[str, Any]:
+    """Return a copy of bindings with the Hypershift modifier key removed."""
+    out = dict(bindings or {})
+    if not hypershift_key:
+        return out
+    canon = canonical_logical(hypershift_key)
+    out.pop(canon, None)
+    if canon == "key_20":
+        out.pop("thumb", None)
+    elif hypershift_key != canon:
+        out.pop(hypershift_key, None)
+    return out

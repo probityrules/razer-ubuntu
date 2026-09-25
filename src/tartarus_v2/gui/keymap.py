@@ -6,6 +6,8 @@ from typing import Any, Callable
 
 from tartarus_v2.input.keys import KEYMAP_LAYOUT, describe_logical, short_label
 
+_UNSET = object()
+
 
 def _format_binding(value: Any) -> str:
     if value is None:
@@ -35,6 +37,7 @@ def build_keymap_grid(
     selected: str | None = None,
     standard_bindings: dict[str, Any] | None = None,
     hypershift_bindings: dict[str, Any] | None = None,
+    hypershift_key: str | None = None,
 ) -> Any:
     """Return a Gtk.Box grid; each cell shows id + Normal/Hypershift bindings."""
     from gi.repository import Gtk
@@ -51,11 +54,7 @@ def build_keymap_grid(
     outer.append(title)
 
     hint = Gtk.Label(
-        label=(
-            "Click a key to edit. N = Normal, H = Hypershift. "
-            "Pressed keys light up (physical EV_KEY when daemon is off; "
-            "mapped output when daemon is on)."
-        )
+        label="Click a key to edit. N = Normal, H = Hypershift. HS key is reserved."
     )
     hint.add_css_class("dim-label")
     hint.set_wrap(True)
@@ -70,8 +69,14 @@ def build_keymap_grid(
     hs = dict(hypershift_bindings or {})
     pressed: set[str] = set()
     selected_name = selected
+    hs_key = hypershift_key
+
+    def _is_hs(logical: str) -> bool:
+        return bool(hs_key) and logical == hs_key
 
     def _cell_label(logical: str) -> str:
+        if _is_hs(logical):
+            return f"{short_label(logical)}\nHS"
         n = _format_binding(std.get(logical))
         h = _format_binding(hs.get(logical))
         return f"{short_label(logical)}\nN:{n}\nH:{h}"
@@ -84,6 +89,10 @@ def build_keymap_grid(
         btn.remove_css_class("suggested-action")
         btn.remove_css_class("destructive-action")
         btn.remove_css_class("opaque")
+        reserved = _is_hs(logical)
+        btn.set_sensitive(not reserved)
+        if reserved:
+            return
         if logical in pressed:
             btn.add_css_class("destructive-action")
         elif selected_name is not None and logical == selected_name:
@@ -92,11 +101,14 @@ def build_keymap_grid(
     def _refresh_all() -> None:
         for logical, info in cells.items():
             info["button"].set_label(_cell_label(logical))
-            tip = (
-                f"{describe_logical(logical)}\n"
-                f"Normal → {_format_binding(std.get(logical))}\n"
-                f"Hypershift → {_format_binding(hs.get(logical))}"
-            )
+            if _is_hs(logical):
+                tip = f"{describe_logical(logical)}\nReserved as Hypershift modifier"
+            else:
+                tip = (
+                    f"{describe_logical(logical)}\n"
+                    f"Normal → {_format_binding(std.get(logical))}\n"
+                    f"Hypershift → {_format_binding(hs.get(logical))}"
+                )
             info["button"].set_tooltip_text(tip)
             _style_cell(logical)
 
@@ -115,6 +127,8 @@ def build_keymap_grid(
 
             def _clicked(_button: Any, name: str = logical) -> None:
                 nonlocal selected_name
+                if _is_hs(name):
+                    return
                 selected_name = name
                 _refresh_all()
                 on_select(name)
@@ -128,19 +142,27 @@ def build_keymap_grid(
 
     def set_selected(name: str | None) -> None:
         nonlocal selected_name
-        selected_name = name
+        if name is not None and _is_hs(name):
+            selected_name = None
+        else:
+            selected_name = name
         _refresh_all()
 
     def set_bindings(
         *,
         standard: dict[str, Any] | None = None,
         hypershift: dict[str, Any] | None = None,
+        hypershift_key: Any = _UNSET,
     ) -> None:
-        nonlocal std, hs
+        nonlocal std, hs, hs_key, selected_name
         if standard is not None:
             std = dict(standard)
         if hypershift is not None:
             hs = dict(hypershift)
+        if hypershift_key is not _UNSET:
+            hs_key = hypershift_key or None
+            if selected_name is not None and _is_hs(selected_name):
+                selected_name = None
         _refresh_all()
 
     def set_pressed(logicals: set[str] | list[str]) -> None:
@@ -148,10 +170,14 @@ def build_keymap_grid(
         pressed = set(logicals)
         _refresh_all()
 
+    def set_hypershift_key(logical: str | None) -> None:
+        set_bindings(hypershift_key=logical)
+
     outer._keymap_cells = cells  # noqa: SLF001
     outer._keymap_set_selected = set_selected  # noqa: SLF001
     outer._keymap_set_bindings = set_bindings  # noqa: SLF001
     outer._keymap_set_pressed = set_pressed  # noqa: SLF001
+    outer._keymap_set_hypershift_key = set_hypershift_key  # noqa: SLF001
     # Back-compat no-ops for older callers
     outer._keymap_set_layer_label = lambda _label: None  # noqa: SLF001
     outer._keymap_buttons = {k: v["button"] for k, v in cells.items()}  # noqa: SLF001

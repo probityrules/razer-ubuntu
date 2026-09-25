@@ -13,7 +13,11 @@ from tartarus_v2.gui.controllers import (
     ProfilesController,
 )
 from tartarus_v2.gui.workers import run_in_thread
-from tartarus_v2.input.keys import ALL_LOGICAL_KEYS, describe_logical
+from tartarus_v2.input.keys import (
+    ALL_LOGICAL_KEYS,
+    describe_logical,
+    strip_hypershift_key_bindings,
+)
 
 
 def _toast(window: Any, message: str) -> None:
@@ -547,20 +551,10 @@ def build_bindings_page(window: Any) -> Any:
     keys = list(ALL_LOGICAL_KEYS)
 
     prefs = Adw.PreferencesPage(title="Bindings", name="bindings")
-    group = Adw.PreferencesGroup(
-        title="Edit binding",
-        description=(
-            "Remaps are system-wide: the remap daemon exclusive-grabs the keypad "
-            "and emits a virtual keyboard to every app — not only this window. "
-            "If the daemon cannot write /dev/uinput it exits and text editors keep "
-            "the default keys (root is not required; use Fix permissions). "
-            "Key highlight here is a preview. Apply writes the profile; if the "
-            "daemon is off it will be started so remaps take effect immediately."
-        ),
-    )
+    group = Adw.PreferencesGroup(title="Edit binding")
 
     profile_list = Gtk.StringList()
-    profile_row = Adw.ComboRow(title="Profile")
+    profile_row = Adw.ComboRow(title="Profile", subtitle="Load a profile to edit")
     profile_row.set_model(profile_list)
     profile_names: list[str] = []
 
@@ -580,9 +574,6 @@ def build_bindings_page(window: Any) -> Any:
     hs_entry_row = Adw.ActionRow(title="Hypershift")
     hs_entry_row.add_suffix(hs_entry)
 
-    status = Adw.ActionRow(title="Status", subtitle="Load a profile to edit")
-    listen_row = Adw.ActionRow(title="Key highlight", subtitle="Starting…")
-
     state: dict[str, Any] = {
         "profile": None,
         "draft": None,
@@ -590,6 +581,7 @@ def build_bindings_page(window: Any) -> Any:
         "selected": None,
         "dirty": False,
         "suppress_entries": False,
+        "highlight_mode": "",
     }
     suppress_profile: dict[str, bool] = {"busy": False}
     highlight: dict[str, Any] = {"monitor": None}
@@ -602,6 +594,31 @@ def build_bindings_page(window: Any) -> Any:
         data = state.get("draft") or {}
         return dict((data.get(layer) or {}).get("bindings") or {})
 
+    def _current_hs_key() -> str | None:
+        draft = state.get("draft") or {}
+        hs = draft.get("hypershift_key")
+        if isinstance(hs, str) and hs:
+            return hs
+        idx = hs_row.get_selected()
+        if 0 <= idx < len(keys):
+            return keys[idx]
+        return None
+
+    def _profile_subtitle(message: str | None = None) -> None:
+        parts: list[str] = []
+        if state.get("profile"):
+            parts.append(str(state["profile"]))
+        if message:
+            parts.append(message)
+        elif state.get("dirty"):
+            parts.append("unpublished changes")
+        mode = state.get("highlight_mode") or ""
+        if mode == "physical":
+            parts.append("physical EV_KEY")
+        elif mode == "virtual":
+            parts.append("mapped output")
+        profile_row.set_subtitle(" · ".join(parts) if parts else "Load a profile to edit")
+
     def _set_dirty(dirty: bool) -> None:
         state["dirty"] = dirty
         apply_btn.set_sensitive(dirty)
@@ -610,27 +627,51 @@ def build_bindings_page(window: Any) -> Any:
             if dirty
             else "No pending binding changes"
         )
-        if dirty and state.get("profile"):
-            status.set_subtitle(f"{state['profile']} · unpublished changes")
+        _profile_subtitle("unpublished changes" if dirty and state.get("profile") else None)
 
     def _sync_keymap() -> None:
+        hs_key = _current_hs_key()
         keymap._keymap_set_bindings(  # noqa: SLF001
             standard=_draft_bindings("standard"),
             hypershift=_draft_bindings("hypershift"),
+            hypershift_key=hs_key,
         )
         mon = highlight.get("monitor")
         if mon is not None and state.get("draft"):
             mon.set_profile(state["draft"])
 
+    def _strip_hs_from_draft() -> bool:
+        """Remove bindings for the current Hypershift key. Returns True if changed."""
+        draft = state.get("draft")
+        hs_key = _current_hs_key()
+        if not draft or not hs_key:
+            return False
+        changed = False
+        for layer_name in ("standard", "hypershift"):
+            layer = draft.setdefault(layer_name, {})
+            bindings = dict((layer.get("bindings") or {}))
+            cleaned = strip_hypershift_key_bindings(bindings, hs_key)
+            if cleaned != bindings:
+                layer["bindings"] = cleaned
+                changed = True
+        return changed
+
     def _fill_entries_for(logical: str | None) -> None:
         state["suppress_entries"] = True
         try:
+            hs_key = _current_hs_key()
+            if logical and hs_key and logical == hs_key:
+                logical = None
             if not logical:
                 selected_row.set_subtitle("Click a key on the layout")
                 normal_entry.set_text("")
                 hs_entry.set_text("")
+                normal_entry.set_sensitive(False)
+                hs_entry.set_sensitive(False)
                 return
             selected_row.set_subtitle(describe_logical(logical))
+            normal_entry.set_sensitive(True)
+            hs_entry.set_sensitive(True)
 
             def _as_text(value: Any) -> str:
                 if value is None:
@@ -655,10 +696,13 @@ def build_bindings_page(window: Any) -> Any:
             state["suppress_entries"] = False
 
     def _select_physical(logical: str) -> None:
+        hs_key = _current_hs_key()
+        if hs_key and logical == hs_key:
+            return
         state["selected"] = logical
         keymap._keymap_set_selected(logical)  # noqa: SLF001
         _fill_entries_for(logical)
-        status.set_subtitle(f"Editing {describe_logical(logical)}")
+        _profile_subtitle(f"editing {describe_logical(logical)}")
 
     keymap = build_keymap_grid(_select_physical)
 
@@ -707,11 +751,15 @@ def build_bindings_page(window: Any) -> Any:
                     hs_row.set_selected(0)
             finally:
                 suppress_profile["busy"] = False
+            _strip_hs_from_draft()
+            if state.get("selected") == _current_hs_key():
+                state["selected"] = None
+                keymap._keymap_set_selected(None)  # noqa: SLF001
             # Force keymap + entry fields to the newly loaded profile immediately.
             _sync_keymap()
             _fill_entries_for(state.get("selected"))
             _set_dirty(False)
-            status.set_subtitle(f"Loaded {requested}")
+            _profile_subtitle(f"loaded {requested}")
             if toast:
                 _toast(window, f"Loaded {requested}")
         except Exception as exc:  # noqa: BLE001
@@ -762,7 +810,10 @@ def build_bindings_page(window: Any) -> Any:
         if state["suppress_entries"]:
             return
         logical = state.get("selected")
+        hs_key = _current_hs_key()
         if not logical or not state.get("draft"):
+            return
+        if hs_key and logical == hs_key:
             return
         text = entry.get_text().strip()
         data = state["draft"]
@@ -772,7 +823,7 @@ def build_bindings_page(window: Any) -> Any:
             bindings[logical] = text
         else:
             bindings.pop(logical, None)
-        data[layer]["bindings"] = bindings
+        data[layer]["bindings"] = strip_hypershift_key_bindings(bindings, hs_key)
         _sync_keymap()
         _set_dirty(True)
 
@@ -789,9 +840,16 @@ def build_bindings_page(window: Any) -> Any:
             return
         key = keys[hs_row.get_selected()]
         if state["draft"].get("hypershift_key") == key:
+            _sync_keymap()
             return
         state["draft"]["hypershift_key"] = key
+        if state.get("selected") == key:
+            state["selected"] = None
+            keymap._keymap_set_selected(None)  # noqa: SLF001
+            _fill_entries_for(None)
+        _strip_hs_from_draft()
         _set_dirty(True)
+        _sync_keymap()
 
     def _apply(_b: Any = None) -> None:
         if not state.get("dirty") or not state.get("draft") or not state.get("profile"):
@@ -804,9 +862,15 @@ def build_bindings_page(window: Any) -> Any:
             draft = state["draft"]
             profile = state["profile"]
             hs_key = draft.get("hypershift_key") or keys[hs_row.get_selected()]
-            # Persist both layers + hypershift key in one shot.
-            std = dict((draft.get("standard") or {}).get("bindings") or {})
-            hyp = dict((draft.get("hypershift") or {}).get("bindings") or {})
+            # Persist both layers + hypershift key in one shot (HS key not bound).
+            std = strip_hypershift_key_bindings(
+                dict((draft.get("standard") or {}).get("bindings") or {}),
+                hs_key,
+            )
+            hyp = strip_hypershift_key_bindings(
+                dict((draft.get("hypershift") or {}).get("bindings") or {}),
+                hs_key,
+            )
             ctrl.save_bindings(profile, "standard", std, hs_key)
             data = ctrl.save_bindings(profile, "hypershift", hyp, hs_key)
             # Keep draft isolated from the returned (and any future) profile object.
@@ -830,14 +894,14 @@ def build_bindings_page(window: Any) -> Any:
                         "(the Bindings preview is not a system remapper). "
                         "Try Daemon → Start, or: tartarus-v2 fix-permissions",
                     )
-                    status.set_subtitle("Saved — daemon not running (no system remap)")
+                    _profile_subtitle("saved — daemon not running")
                     _sync_keymap()
                     return
                 _toast(
                     window,
                     "Applied — bindings saved; remap daemon started (system-wide)",
                 )
-                status.set_subtitle("Applied — daemon started (system-wide remap)")
+                _profile_subtitle("applied — daemon started")
             else:
                 detail = ctrl.apply_bindings()
                 _refresh_header_daemon(window)
@@ -848,7 +912,7 @@ def build_bindings_page(window: Any) -> Any:
                     )
                 else:
                     _toast(window, f"Applied ({detail})")
-                status.set_subtitle(f"Applied ({detail})")
+                _profile_subtitle(f"applied ({detail})")
             _sync_keymap()
             _start_highlight()
         except Exception as exc:  # noqa: BLE001
@@ -857,14 +921,16 @@ def build_bindings_page(window: Any) -> Any:
     def _on_highlight(pressed: set[str], mode: str) -> None:
         def apply() -> bool:
             keymap._keymap_set_pressed(pressed)  # noqa: SLF001
-            if mode == "physical":
-                listen_row.set_subtitle("Physical EV_KEY (daemon off)")
-            elif mode == "virtual":
-                listen_row.set_subtitle("Mapped output (daemon on)")
+            if mode in ("physical", "virtual"):
+                state["highlight_mode"] = mode
             elif mode == "stopped":
-                listen_row.set_subtitle("Idle")
+                state["highlight_mode"] = ""
             else:
-                listen_row.set_subtitle(mode)
+                state["highlight_mode"] = mode if mode and not str(mode).startswith("unavailable") else ""
+            if not state.get("dirty"):
+                _profile_subtitle(None)
+            else:
+                _profile_subtitle("unpublished changes")
             return False
 
         GLib.idle_add(apply)
@@ -880,7 +946,8 @@ def build_bindings_page(window: Any) -> Any:
         try:
             mon.start()
         except Exception as exc:  # noqa: BLE001
-            listen_row.set_subtitle(f"Unavailable: {exc}")
+            state["highlight_mode"] = ""
+            _profile_subtitle(f"highlight unavailable: {exc}")
 
     def _stop_highlight() -> None:
         mon = highlight.get("monitor")
@@ -888,6 +955,7 @@ def build_bindings_page(window: Any) -> Any:
             mon.stop()
             highlight["monitor"] = None
         keymap._keymap_set_pressed(set())  # noqa: SLF001
+        state["highlight_mode"] = ""
 
     profiles_btn.connect("clicked", _go_profiles)
     profile_row.connect("notify::selected", _on_profile_selected)
@@ -895,7 +963,7 @@ def build_bindings_page(window: Any) -> Any:
     normal_entry.connect("changed", _on_normal_changed)
     hs_entry.connect("changed", _on_hs_changed)
 
-    for row in (profile_row, hs_row, selected_row, normal_row, hs_entry_row, listen_row, status):
+    for row in (profile_row, hs_row, selected_row, normal_row, hs_entry_row):
         group.add(row)
 
     apply_row = Adw.ActionRow(
@@ -960,16 +1028,11 @@ def build_daemon_page(window: Any) -> Any:
 
     group = Adw.PreferencesGroup(
         title="Remap daemon",
-        description=(
-            "System-wide driver: exclusive-grabs the Tartarus and injects a "
-            "virtual keyboard for every app. Opening this window is not enough — "
-            "the header LED must stay green. LED grey means text editors still "
-            "get the firmware default keys. The daemon does not need root; it "
-            "needs a writable /dev/uinput (Fix permissions)."
-        ),
+        description="Header LED green = remaps are live system-wide.",
     )
     status_row = Adw.ActionRow(title="Status", subtitle="Unknown")
     debug_switch = Gtk.Switch()
+    debug_switch.set_valign(Gtk.Align.CENTER)
     debug_row = Adw.ActionRow(title="Debug logging")
     debug_row.add_suffix(debug_switch)
     debug_row.set_activatable_widget(debug_switch)
@@ -1052,15 +1115,10 @@ def build_diagnose_page(window: Any) -> Any:
     daemon_ctrl = DaemonController()
     page = Adw.PreferencesPage(title="Diagnose", name="diagnose")
 
-    live = Adw.PreferencesGroup(
-        title="Live key listen",
-        description=(
-            "Same source selection as Bindings key highlight. Use the remap "
-            "daemon toggle to choose physical EV_KEY vs remapped virtual output."
-        ),
-    )
+    live = Adw.PreferencesGroup(title="Live key listen")
 
     daemon_switch = Gtk.Switch()
+    daemon_switch.set_valign(Gtk.Align.CENTER)
     daemon_row = Adw.ActionRow(title="Remap daemon")
     daemon_row.add_suffix(daemon_switch)
     daemon_row.set_activatable_widget(daemon_switch)
@@ -1307,6 +1365,7 @@ def build_diagnose_page(window: Any) -> Any:
     )
 
     skip = Gtk.Switch()
+    skip.set_valign(Gtk.Align.CENTER)
     skip_row = Adw.ActionRow(title="Skip USB probe")
     skip_row.add_suffix(skip)
     skip_row.set_activatable_widget(skip)

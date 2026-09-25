@@ -243,6 +243,16 @@ def test_short_label_keys() -> None:
     fold_thumb_alias(bare)  # type: ignore[arg-type]
     assert bare["hypershift_key"] == 1
 
+    from tartarus_v2.input.keys import strip_hypershift_key_bindings
+
+    cleaned = strip_hypershift_key_bindings(
+        {"mode": "x", "key_01": "1", "thumb": "space"},
+        "mode",
+    )
+    assert "mode" not in cleaned
+    assert cleaned["key_01"] == "1"
+    assert strip_hypershift_key_bindings({"key_20": "a", "thumb": "b"}, "key_20") == {}
+
 
 def test_remapper_skips_virtual_keyboard_device() -> None:
     from types import SimpleNamespace
