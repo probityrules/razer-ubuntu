@@ -35,8 +35,9 @@ def present_update_check(window: Any) -> None:
         dialog = Adw.AlertDialog.new(
             f"Update to {result.latest}?",
             f"{result.detail} This downloads the release and installs it "
-            "(admin approval). The remap daemon is stopped and restarted "
-            "if it was running, and this window will reopen on the new version.",
+            "(admin approval). The remap daemon is fully stopped and restarted "
+            "(systemd and/or background). This window will reopen on the new version. "
+            "If keys stay dead afterward, use Daemon → Start or log out/in.",
         )
         dialog.add_response("cancel", "Cancel")
         dialog.add_response("install", "Install update")

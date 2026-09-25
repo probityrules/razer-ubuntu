@@ -185,17 +185,20 @@ def test_daemon_control_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 def test_daemon_kill_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-    with patch(
-        "tartarus_v2.daemon_control.status",
-        return_value=daemon_control.DaemonStatus(running=True, pid=55),
-    ):
-        with patch("tartarus_v2.daemon_control._pid_alive", return_value=True):
-            with patch("tartarus_v2.daemon_control.os.kill") as kill:
-                with patch("tartarus_v2.daemon_control.time.sleep"):
-                    with patch("tartarus_v2.daemon_control.time.time", side_effect=[0, 10, 10]):
-                        st = daemon_control.stop(timeout=0.01)
-                        assert not st.running
-                        assert kill.call_count >= 1
+    daemon_control.pid_path().parent.mkdir(parents=True, exist_ok=True)
+    daemon_control.pid_path().write_text("55\n", encoding="utf-8")
+    with patch("tartarus_v2.daemon_control.systemd_unit_enabled", return_value=False):
+        with patch("tartarus_v2.daemon_control.systemd_unit_active", return_value=False):
+            with patch("tartarus_v2.daemon_control._pid_alive", return_value=True):
+                with patch("tartarus_v2.daemon_control.os.kill") as kill:
+                    with patch("tartarus_v2.daemon_control.time.sleep"):
+                        with patch(
+                            "tartarus_v2.daemon_control.time.time",
+                            side_effect=[0, 10, 10],
+                        ):
+                            st = daemon_control.stop(timeout=0.01)
+                            assert not st.running
+                            assert kill.call_count >= 1
 
 
 @patch("tartarus_v2.actions.launch_gui", return_value=0)

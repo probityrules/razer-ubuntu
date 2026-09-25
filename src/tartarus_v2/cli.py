@@ -39,7 +39,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_daemon.add_argument(
         "--stop",
         action="store_true",
-        help="Stop the background remap daemon if it is running",
+        help="Stop the remap daemon (systemd unit and/or background process)",
+    )
+    p_daemon.add_argument(
+        "--restart",
+        action="store_true",
+        help="Stop all remapper supervisors then start the preferred one",
     )
 
     sub.add_parser("uninstall", help="Remove the tartarus-v2 package (apt/pkexec)")
@@ -110,6 +115,12 @@ def main(argv: list[str] | None = None) -> int:
             st = daemon_control.stop()
             print(st.detail + (f" pid={st.pid}" if st.pid else ""))
             return 0
+        if getattr(args, "restart", False):
+            from tartarus_v2 import daemon_control
+
+            st = daemon_control.restart(profile=args.profile, debug=args.debug)
+            print(st.detail + (f" pid={st.pid}" if st.pid else ""))
+            return 0 if st.running else 1
         if getattr(args, "background", False):
             st = actions.start_daemon_background(profile=args.profile, debug=args.debug)
             print(st.detail + (f" pid={st.pid}" if st.pid else ""))

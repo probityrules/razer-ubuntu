@@ -40,8 +40,16 @@ if command -v systemctl >/dev/null 2>&1; then
   systemctl --global enable tartarus-v2.service >/dev/null 2>&1 || true
   if [ -n "$TARGET_USER" ] && [ "$TARGET_USER" != "root" ]; then
     if command -v runuser >/dev/null 2>&1; then
-      runuser -u "$TARGET_USER" -- systemctl --user daemon-reload >/dev/null 2>&1 || true
-      runuser -u "$TARGET_USER" -- systemctl --user enable tartarus-v2.service >/dev/null 2>&1 || true
+      TARGET_UID="$(id -u "$TARGET_USER" 2>/dev/null || true)"
+      if [ -n "$TARGET_UID" ] && [ -d "/run/user/$TARGET_UID" ]; then
+        runuser -u "$TARGET_USER" --env "XDG_RUNTIME_DIR=/run/user/$TARGET_UID" -- \
+          systemctl --user daemon-reload >/dev/null 2>&1 || true
+        runuser -u "$TARGET_USER" --env "XDG_RUNTIME_DIR=/run/user/$TARGET_UID" -- \
+          systemctl --user enable tartarus-v2.service >/dev/null 2>&1 || true
+      else
+        runuser -u "$TARGET_USER" -- systemctl --user daemon-reload >/dev/null 2>&1 || true
+        runuser -u "$TARGET_USER" -- systemctl --user enable tartarus-v2.service >/dev/null 2>&1 || true
+      fi
     fi
   fi
 fi
@@ -49,15 +57,22 @@ fi
 echo "tartarus-v2: installed. Run: tartarus-v2 gui"
 echo "  If remapping fails: tartarus-v2 fix-permissions"
 
-# Best-effort: restart the installing user's remap daemon so upgrades load
-# new remapper code without a manual stop/start.
+# Best-effort: fully restart the installing user's remap daemon so upgrades
+# drop any leftover in-memory remapper (systemd unit and/or PID-file process).
 if [ -n "$TARGET_USER" ] && [ "$TARGET_USER" != "root" ] && command -v tartarus-v2 >/dev/null 2>&1; then
+  TARGET_UID="$(id -u "$TARGET_USER" 2>/dev/null || true)"
   if command -v runuser >/dev/null 2>&1; then
-    runuser -u "$TARGET_USER" -- tartarus-v2 daemon --stop >/dev/null 2>&1 || true
-    runuser -u "$TARGET_USER" -- tartarus-v2 daemon --background >/dev/null 2>&1 || true
-    echo "tartarus-v2: restarted remap daemon for '$TARGET_USER' (if it was/can run)."
+    if [ -n "$TARGET_UID" ] && [ -d "/run/user/$TARGET_UID" ]; then
+      runuser -u "$TARGET_USER" --env "XDG_RUNTIME_DIR=/run/user/$TARGET_UID" -- \
+        tartarus-v2 daemon --restart >/dev/null 2>&1 || true
+    else
+      runuser -u "$TARGET_USER" -- tartarus-v2 daemon --restart >/dev/null 2>&1 || true
+    fi
+    echo "tartarus-v2: restarted remap daemon for '$TARGET_USER' (systemd and/or background)."
   elif command -v su >/dev/null 2>&1; then
-    su - "$TARGET_USER" -c "tartarus-v2 daemon --stop >/dev/null 2>&1 || true; tartarus-v2 daemon --background >/dev/null 2>&1 || true" || true
+    su - "$TARGET_USER" -c "tartarus-v2 daemon --restart >/dev/null 2>&1 || true" || true
     echo "tartarus-v2: attempted remap daemon restart for '$TARGET_USER'."
   fi
+  echo "tartarus-v2: if keys stay dead after upgrade: tartarus-v2 daemon --restart"
+  echo "  or log out/in (reboot also works)."
 fi

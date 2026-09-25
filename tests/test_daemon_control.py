@@ -58,6 +58,59 @@ def test_reload_when_not_running(pid_home: Path) -> None:
     assert "not running" in st.detail
 
 
+def test_status_sees_systemd_when_no_pid(pid_home: Path) -> None:
+    with patch("tartarus_v2.daemon_control.systemd_unit_active", return_value=True):
+        st = daemon_control.status()
+    assert st.running
+    assert "systemd" in st.detail
+
+
+def test_stop_stops_systemd_and_pid(pid_home: Path) -> None:
+    daemon_control.pid_path().write_text("55\n", encoding="utf-8")
+    with patch("tartarus_v2.daemon_control.systemd_unit_enabled", return_value=True):
+        with patch("tartarus_v2.daemon_control.systemd_unit_active", side_effect=[True, False, False]):
+            with patch(
+                "tartarus_v2.daemon_control._systemctl_user",
+                return_value=MagicMock(returncode=0, stdout="", stderr=""),
+            ) as sysctl:
+                with patch("tartarus_v2.daemon_control._pid_alive", side_effect=[True, False]):
+                    with patch("tartarus_v2.daemon_control.os.kill") as kill:
+                        st = daemon_control.stop()
+    assert not st.running
+    sysctl.assert_any_call("stop", daemon_control.USER_SERVICE)
+    kill.assert_called()
+
+
+def test_start_prefers_systemd_when_enabled(pid_home: Path) -> None:
+    with patch("tartarus_v2.daemon_control.systemd_unit_enabled", return_value=True):
+        with patch("tartarus_v2.daemon_control.systemd_unit_active", side_effect=[False, True]):
+            with patch(
+                "tartarus_v2.daemon_control._systemctl_user",
+                return_value=MagicMock(returncode=0, stdout="", stderr=""),
+            ) as sysctl:
+                with patch("tartarus_v2.daemon_control.subprocess.Popen") as popen:
+                    st = daemon_control.start()
+    assert st.running
+    assert "systemd" in st.detail
+    sysctl.assert_called_with("start", daemon_control.USER_SERVICE)
+    popen.assert_not_called()
+
+
+def test_restart_uses_systemd_restart(pid_home: Path) -> None:
+    with patch("tartarus_v2.daemon_control.stop", return_value=daemon_control.DaemonStatus(False)):
+        with patch("tartarus_v2.daemon_control.systemd_unit_enabled", return_value=True):
+            with patch("tartarus_v2.daemon_control.systemd_unit_active", return_value=True):
+                with patch(
+                    "tartarus_v2.daemon_control._systemctl_user",
+                    return_value=MagicMock(returncode=0, stdout="", stderr=""),
+                ) as sysctl:
+                    with patch("tartarus_v2.daemon_control.time.sleep"):
+                        st = daemon_control.restart()
+    assert st.running
+    assert "systemd" in st.detail
+    sysctl.assert_called_with("restart", daemon_control.USER_SERVICE)
+
+
 def test_start_reports_log_error_when_daemon_exits(pid_home: Path) -> None:
     log = pid_home / "tartarus-v2" / "tartarus-v2.log"
     log.parent.mkdir(parents=True, exist_ok=True)

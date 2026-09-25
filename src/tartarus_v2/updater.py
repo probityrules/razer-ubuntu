@@ -159,8 +159,9 @@ def _safe_asset_url(url: str) -> bool:
 def install_update(info: UpdateCheck, timeout: float = 60.0) -> str:
     """Download the release .deb and install it with pkexec/apt (admin once).
 
-    Stops the remap daemon before installing and restarts it afterward when it
-    was running, so upgrades pick up new remapper code without a manual cycle.
+    Stops every remapper supervisor (systemd user unit and/or PID-file
+    daemon) before installing, then fully restarts afterward when it was
+    running, so upgrades load new remapper code without a leftover process.
     """
     if not info.update_available:
         return info.detail or "Already up to date."
@@ -253,18 +254,22 @@ def install_update(info: UpdateCheck, timeout: float = 60.0) -> str:
     daemon_note = "Remap daemon was not running."
     if was_running:
         try:
-            st = daemon_control.start()
+            st = daemon_control.restart()
             if st.running:
-                daemon_note = "Remap daemon restarted with the new package."
+                daemon_note = (
+                    f"Remap daemon restarted with the new package ({st.detail})."
+                )
             else:
                 daemon_note = (
                     f"Remap daemon was stopped for the upgrade but did not restart "
-                    f"({st.detail}). Start it from the Daemon page."
+                    f"({st.detail}). Use Daemon → Start, or: tartarus-v2 daemon --restart. "
+                    "If keys stay dead, log out/in or reboot."
                 )
         except Exception as exc:  # noqa: BLE001
             daemon_note = (
                 f"Remap daemon was stopped for the upgrade but restart failed ({exc}). "
-                "Start it from the Daemon page."
+                "Use Daemon → Start, or: tartarus-v2 daemon --restart. "
+                "If keys stay dead, log out/in or reboot."
             )
 
     return (

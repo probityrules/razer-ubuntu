@@ -188,14 +188,14 @@ def test_install_refuses_and_succeeds(tmp_path: Path, monkeypatch: pytest.Monkey
                     with patch("tartarus_v2.daemon_control.status", return_value=fake_status):
                         with patch("tartarus_v2.daemon_control.stop", return_value=fake_stopped) as stop:
                             with patch(
-                                "tartarus_v2.daemon_control.start",
+                                "tartarus_v2.daemon_control.restart",
                                 return_value=fake_started,
-                            ) as start:
+                            ) as restart:
                                 msg = install_update(good)
     assert msg.startswith("Installed")
     assert "daemon restarted" in msg.lower()
     stop.assert_called_once()
-    start.assert_called_once()
+    restart.assert_called_once()
     assert run.call_args.args[0][0].endswith("pkexec")
     deb = tmp_path / "tartarus-v2" / "tartarus-v2_0.8.0_all.deb"
     assert deb.is_file()
