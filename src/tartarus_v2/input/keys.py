@@ -76,16 +76,28 @@ ALL_LOGICAL_KEYS = sorted(LOGICAL_TO_CODE.keys()) + [
     "scroll_click",
 ]
 
-# Top-down layout matching Synapse-style numbering:
-#   01–05 / 06–10 / 11–15 / 16–19   (bottom keypad row is four keys)
-#   scr up, scr, scr down
-#   mode, lf, up, rt, dn, key 20 (thumb — not part of the keypad row)
-KEYMAP_LAYOUT: list[list[str | None]] = [
+# Device-like Bindings layout:
+#   keypad 01–19 left; scroll column + mode/stick/20 on the right.
+#
+#   [01] [02] [03] [04] [05]      [Scr↑]  (mode)
+#   [06] [07] [08] [09] [10]      [Scr•]    ┌ stick ┐
+#   [11] [12] [13] [14] [15]      [Scr↓]    │  ↑    │
+#   [16] [17] [18] [19]                     │ ←  →  │
+#                                           │  ↓    │
+#                                           └───────┘
+#                                              [20]
+KEYMAP_PAD_LAYOUT: list[list[str | None]] = [
     ["key_01", "key_02", "key_03", "key_04", "key_05"],
     ["key_06", "key_07", "key_08", "key_09", "key_10"],
     ["key_11", "key_12", "key_13", "key_14", "key_15"],
     ["key_16", "key_17", "key_18", "key_19"],
-    ["scroll_up", "scroll_click", "scroll_down", None, None],
+]
+KEYMAP_SCROLL_COLUMN: list[str] = ["scroll_up", "scroll_click", "scroll_down"]
+
+# Flat row list kept for tests / callers that iterate every logical key.
+KEYMAP_LAYOUT: list[list[str | None]] = [
+    *KEYMAP_PAD_LAYOUT,
+    ["scroll_up", "scroll_click", "scroll_down"],
     ["mode", "stick_left", "stick_up", "stick_right", "stick_down", "key_20"],
 ]
 
@@ -93,17 +105,19 @@ KEYMAP_ASCII = """
 Tartarus V2 logical key map (for bindings / profile JSON)
 =========================================================
 
-  [01] [02] [03] [04] [05]
-  [06] [07] [08] [09] [10]
-  [11] [12] [13] [14] [15]
-  [16] [17] [18] [19]
-  [Scr↑] [Scr•] [Scr↓]
-  [mode] [←] [↑] [→] [↓] [20]
+  [01] [02] [03] [04] [05]      [Scr↑]  (mode)
+  [06] [07] [08] [09] [10]      [Scr•]    ┌ stick ┐
+  [11] [12] [13] [14] [15]      [Scr↓]    │   ↑   │
+  [16] [17] [18] [19]                     │ ←   → │
+                                          │   ↓   │
+                                          └───────┘
+                                             [20]
 
 Notes:
   - mode is often used as Hypershift (hold for secondary layer)
   - key 20 is the hyperesponse thumb key (default Space), not a fifth keypad key
   - the bottom keypad row is keys 16–19 only
+  - scroll sits beside the pad; stick directions share one circular cluster
 """.strip()
 
 

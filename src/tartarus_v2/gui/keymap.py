@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from tartarus_v2.input.keys import KEYMAP_LAYOUT, describe_logical, short_label
+from tartarus_v2.input.keys import (
+    KEYMAP_PAD_LAYOUT,
+    KEYMAP_SCROLL_COLUMN,
+    describe_logical,
+    short_label,
+)
 
 _UNSET = object()
 _CSS_LOADED = False
@@ -15,6 +20,23 @@ button.keymap-key {
   min-height: 72px;
   padding: 6px 8px;
   border-radius: 8px;
+}
+button.keymap-key.keymap-scroll {
+  min-width: 72px;
+}
+button.keymap-key.keymap-mode {
+  min-width: 72px;
+  border-radius: 999px;
+}
+button.keymap-key.keymap-stick {
+  min-width: 56px;
+  min-height: 48px;
+  padding: 4px;
+  border-radius: 999px;
+}
+button.keymap-key.keymap-thumb {
+  min-width: 168px;
+  min-height: 64px;
 }
 button.keymap-key label.keymap-name {
   font-weight: 700;
@@ -37,6 +59,12 @@ button.keymap-key label.keymap-hs {
 }
 button.keymap-key:disabled {
   opacity: 0.55;
+}
+frame.keymap-stick-ring {
+  border: 2px solid alpha(@borders, 0.9);
+  border-radius: 999px;
+  padding: 10px;
+  background-color: alpha(@theme_bg_color, 0.35);
 }
 """
 
@@ -89,7 +117,7 @@ def build_keymap_grid(
     hypershift_bindings: dict[str, Any] | None = None,
     hypershift_key: str | None = None,
 ) -> Any:
-    """Return a Gtk.Box grid; each cell shows id + Normal/Hypershift bindings."""
+    """Return a Gtk.Box matching the physical Tartarus layout."""
     from gi.repository import Gtk, Pango
 
     _ensure_keymap_css()
@@ -106,15 +134,15 @@ def build_keymap_grid(
     outer.append(title)
 
     hint = Gtk.Label(
-        label="Click a key to edit. N = Normal (blue), H = Hypershift (orange). HS key is reserved."
+        label=(
+            "Click a key to edit. N = Normal (blue), H = Hypershift (orange). "
+            "HS key is reserved."
+        )
     )
     hint.add_css_class("dim-label")
     hint.set_wrap(True)
     hint.set_xalign(0)
     outer.append(hint)
-
-    grid = Gtk.Grid(column_spacing=8, row_spacing=8)
-    grid.set_halign(Gtk.Align.CENTER)
 
     cells: dict[str, dict[str, Any]] = {}
     std = dict(standard_bindings or {})
@@ -170,69 +198,188 @@ def build_keymap_grid(
         for logical in cells:
             _refresh_cell(logical)
 
-    for r, row in enumerate(KEYMAP_LAYOUT):
+    def _make_key(
+        logical: str,
+        *,
+        extra_classes: tuple[str, ...] = (),
+        width: int = 88,
+        height: int = 72,
+        max_chars: int = 10,
+    ) -> Any:
+        btn = Gtk.Button()
+        btn.set_size_request(width, height)
+        btn.add_css_class("keymap-key")
+        for cls in extra_classes:
+            btn.add_css_class(cls)
+
+        stack = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        stack.set_halign(Gtk.Align.CENTER)
+        stack.set_valign(Gtk.Align.CENTER)
+
+        name_lbl = Gtk.Label(label=short_label(logical))
+        name_lbl.add_css_class("keymap-name")
+        name_lbl.set_halign(Gtk.Align.CENTER)
+
+        n_lbl = Gtk.Label(label="N:—")
+        n_lbl.add_css_class("keymap-n")
+        n_lbl.set_halign(Gtk.Align.CENTER)
+        n_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        n_lbl.set_max_width_chars(max_chars)
+
+        h_lbl = Gtk.Label(label="H:—")
+        h_lbl.add_css_class("keymap-h")
+        h_lbl.set_halign(Gtk.Align.CENTER)
+        h_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        h_lbl.set_max_width_chars(max_chars)
+
+        reserved_lbl = Gtk.Label(label="HS")
+        reserved_lbl.add_css_class("keymap-hs")
+        reserved_lbl.set_halign(Gtk.Align.CENTER)
+        reserved_lbl.set_visible(False)
+
+        stack.append(name_lbl)
+        stack.append(n_lbl)
+        stack.append(h_lbl)
+        stack.append(reserved_lbl)
+        btn.set_child(stack)
+
+        def _clicked(_button: Any, name: str = logical) -> None:
+            nonlocal selected_name
+            if _is_hs(name):
+                return
+            selected_name = name
+            _refresh_all()
+            on_select(name)
+
+        btn.connect("clicked", _clicked)
+        cells[logical] = {
+            "button": btn,
+            "name": name_lbl,
+            "n": n_lbl,
+            "h": h_lbl,
+            "reserved": reserved_lbl,
+        }
+        return btn
+
+    # --- Left: main keypad -------------------------------------------------
+    pad = Gtk.Grid(column_spacing=8, row_spacing=8)
+    for r, row in enumerate(KEYMAP_PAD_LAYOUT):
         for c, logical in enumerate(row):
             if logical is None:
-                spacer = Gtk.Label(label="")
-                spacer.set_size_request(72, 52)
-                grid.attach(spacer, c, r, 1, 1)
                 continue
+            pad.attach(_make_key(logical), c, r, 1, 1)
 
-            btn = Gtk.Button()
-            btn.set_size_request(88, 72)
-            btn.add_css_class("keymap-key")
+    # --- Right: scroll | mode + stick circle + thumb ----------------------
+    scroll_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    scroll_col.set_valign(Gtk.Align.START)
+    for logical in KEYMAP_SCROLL_COLUMN:
+        scroll_col.append(
+            _make_key(logical, extra_classes=("keymap-scroll",), width=76, height=72)
+        )
 
-            stack = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-            stack.set_halign(Gtk.Align.CENTER)
-            stack.set_valign(Gtk.Align.CENTER)
+    mode_btn = _make_key(
+        "mode",
+        extra_classes=("keymap-mode",),
+        width=76,
+        height=72,
+        max_chars=8,
+    )
+    mode_btn.set_halign(Gtk.Align.CENTER)
 
-            name_lbl = Gtk.Label(label=short_label(logical))
-            name_lbl.add_css_class("keymap-name")
-            name_lbl.set_halign(Gtk.Align.CENTER)
+    stick_grid = Gtk.Grid(column_spacing=4, row_spacing=4)
+    stick_grid.set_halign(Gtk.Align.CENTER)
+    stick_grid.set_valign(Gtk.Align.CENTER)
+    # 3×3 with center empty:
+    #     ↑
+    #   ←   →
+    #     ↓
+    stick_grid.attach(
+        _make_key(
+            "stick_up",
+            extra_classes=("keymap-stick",),
+            width=56,
+            height=48,
+            max_chars=6,
+        ),
+        1,
+        0,
+        1,
+        1,
+    )
+    stick_grid.attach(
+        _make_key(
+            "stick_left",
+            extra_classes=("keymap-stick",),
+            width=56,
+            height=48,
+            max_chars=6,
+        ),
+        0,
+        1,
+        1,
+        1,
+    )
+    stick_grid.attach(
+        _make_key(
+            "stick_right",
+            extra_classes=("keymap-stick",),
+            width=56,
+            height=48,
+            max_chars=6,
+        ),
+        2,
+        1,
+        1,
+        1,
+    )
+    stick_grid.attach(
+        _make_key(
+            "stick_down",
+            extra_classes=("keymap-stick",),
+            width=56,
+            height=48,
+            max_chars=6,
+        ),
+        1,
+        2,
+        1,
+        1,
+    )
 
-            n_lbl = Gtk.Label(label="N:—")
-            n_lbl.add_css_class("keymap-n")
-            n_lbl.set_halign(Gtk.Align.CENTER)
-            n_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-            n_lbl.set_max_width_chars(10)
+    stick_ring = Gtk.Frame()
+    stick_ring.add_css_class("keymap-stick-ring")
+    stick_ring.set_child(stick_grid)
+    stick_ring.set_halign(Gtk.Align.CENTER)
 
-            h_lbl = Gtk.Label(label="H:—")
-            h_lbl.add_css_class("keymap-h")
-            h_lbl.set_halign(Gtk.Align.CENTER)
-            h_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-            h_lbl.set_max_width_chars(10)
+    thumb = _make_key(
+        "key_20",
+        extra_classes=("keymap-thumb",),
+        width=168,
+        height=64,
+        max_chars=12,
+    )
+    thumb.set_halign(Gtk.Align.CENTER)
 
-            reserved_lbl = Gtk.Label(label="HS")
-            reserved_lbl.add_css_class("keymap-hs")
-            reserved_lbl.set_halign(Gtk.Align.CENTER)
-            reserved_lbl.set_visible(False)
+    thumb_cluster = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    thumb_cluster.set_valign(Gtk.Align.START)
+    thumb_cluster.append(mode_btn)
+    thumb_cluster.append(stick_ring)
+    thumb_cluster.append(thumb)
 
-            stack.append(name_lbl)
-            stack.append(n_lbl)
-            stack.append(h_lbl)
-            stack.append(reserved_lbl)
-            btn.set_child(stack)
+    # Mode aligns with Scr↑: put mode+stick beside scroll in a horizontal row
+    # where mode sits on the first scroll row height.
+    right = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+    right.set_valign(Gtk.Align.START)
+    right.append(scroll_col)
+    right.append(thumb_cluster)
 
-            def _clicked(_button: Any, name: str = logical) -> None:
-                nonlocal selected_name
-                if _is_hs(name):
-                    return
-                selected_name = name
-                _refresh_all()
-                on_select(name)
-
-            btn.connect("clicked", _clicked)
-            cells[logical] = {
-                "button": btn,
-                "name": name_lbl,
-                "n": n_lbl,
-                "h": h_lbl,
-                "reserved": reserved_lbl,
-            }
-            grid.attach(btn, c, r, 1, 1)
+    board = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+    board.set_halign(Gtk.Align.CENTER)
+    board.append(pad)
+    board.append(right)
+    outer.append(board)
 
     _refresh_all()
-    outer.append(grid)
 
     def set_selected(name: str | None) -> None:
         nonlocal selected_name

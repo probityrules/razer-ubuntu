@@ -251,6 +251,8 @@ def test_short_label_keys() -> None:
     from tartarus_v2.input.keys import (
         ALL_LOGICAL_KEYS,
         KEYMAP_LAYOUT,
+        KEYMAP_PAD_LAYOUT,
+        KEYMAP_SCROLL_COLUMN,
         LOGICAL_TO_CODE,
         describe_logical,
         short_label,
@@ -273,6 +275,8 @@ def test_short_label_keys() -> None:
     assert "mode" in flat
     # Bottom keypad row is keys 16–19. Key 20 is the thumb, not a fifth key.
     assert KEYMAP_LAYOUT[3] == ["key_16", "key_17", "key_18", "key_19"]
+    assert KEYMAP_PAD_LAYOUT[3] == ["key_16", "key_17", "key_18", "key_19"]
+    assert KEYMAP_SCROLL_COLUMN == ["scroll_up", "scroll_click", "scroll_down"]
     assert "key_20" not in KEYMAP_LAYOUT[3]
     assert all(key is not None for key in KEYMAP_LAYOUT[3])
     assert LOGICAL_TO_CODE["key_20"] == 57
