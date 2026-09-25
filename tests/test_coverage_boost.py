@@ -144,6 +144,70 @@ def test_lighting_controller_forwards_profile(
     assert mock_set.call_args.kwargs["rgb"] == "AABBCC"
 
 
+def test_use_profile_applies_lighting_without_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    profiles.ensure_default_profile()
+    other = profiles.load_profile("default")
+    other["lighting"] = {"effect": "static", "rgb": "FF00AA", "brightness": 80}
+    profiles.save_profile(other, "red")
+    profiles.set_active_profile_name("default")
+
+    chroma = MagicMock()
+    with patch("tartarus_v2.actions._running_daemon", return_value=None):
+        with patch("tartarus_v2.hid.device.TartarusDevice") as mock_dev:
+            mock_dev.return_value.__enter__.return_value = MagicMock()
+            with patch(
+                "tartarus_v2.hid.chroma.ChromaController", return_value=chroma
+            ):
+                assert actions.use_profile("red") == "red"
+
+    assert profiles.get_active_profile_name() == "red"
+    chroma.apply_lighting.assert_called_once_with(
+        {"effect": "static", "rgb": "FF00AA", "brightness": 80}
+    )
+
+
+def test_use_profile_reloads_daemon_when_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    profiles.ensure_default_profile()
+    profiles.save_profile(profiles.load_profile("default"), "second")
+    monkeypatch.setattr(
+        "tartarus_v2.actions._running_daemon",
+        lambda: type("S", (), {"running": True, "pid": 9})(),
+    )
+    with patch("tartarus_v2.actions.nudge_daemon_reload", return_value="reload signaled") as nudge:
+        with patch("tartarus_v2.hid.device.TartarusDevice") as mock_dev:
+            assert actions.use_profile("second") == "second"
+    nudge.assert_called_once()
+    mock_dev.assert_not_called()
+    assert profiles.get_active_profile_name() == "second"
+
+
+def test_cycle_active_profile_applies_lighting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    profiles.ensure_default_profile()
+    second = profiles.load_profile("default")
+    second["lighting"] = {"effect": "wave", "direction": 1, "brightness": 40}
+    profiles.save_profile(second, "second")
+    profiles.set_active_profile_name("default")
+    chroma = MagicMock()
+    with patch("tartarus_v2.actions._running_daemon", return_value=None):
+        with patch("tartarus_v2.hid.device.TartarusDevice") as mock_dev:
+            mock_dev.return_value.__enter__.return_value = MagicMock()
+            with patch(
+                "tartarus_v2.hid.chroma.ChromaController", return_value=chroma
+            ):
+                assert actions.cycle_active_profile("next") == "second"
+    assert profiles.get_active_profile_name() == "second"
+    chroma.apply_lighting.assert_called_once()
+
+
 def test_profile_cycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     profiles.ensure_default_profile()

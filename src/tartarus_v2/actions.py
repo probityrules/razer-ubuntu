@@ -189,10 +189,46 @@ def show_profile(name: str | None = None) -> dict[str, Any]:
     return prof.load_profile(name or prof.get_active_profile_name())
 
 
-def use_profile(name: str) -> str:
+def _push_active_lighting(*, debug: bool = False) -> str:
+    """Push the active profile's lighting to the pad.
+
+    Daemon running → SIGHUP so the daemon (which owns HID) reloads lighting.
+    Daemon off → write chroma directly (same path as Lighting Apply).
+
+    Lighting failures are logged but do not raise — activating a profile must
+    still succeed even if the pad is unplugged or busy.
+    """
+    import logging
+
+    log = logging.getLogger("tartarus_v2.hid")
+    try:
+        if _running_daemon() is not None:
+            return nudge_daemon_reload()
+
+        from tartarus_v2.hid.chroma import ChromaController
+        from tartarus_v2.hid.device import TartarusDevice
+
+        data = prof.load_profile(prof.get_active_profile_name())
+        with TartarusDevice(debug=debug) as dev:
+            ChromaController(dev).apply_lighting(data.get("lighting") or {})
+        return "applied"
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not apply lighting for active profile: %s", exc)
+        return f"lighting failed: {exc}"
+
+
+def use_profile(name: str, *, debug: bool = False) -> str:
+    """Make ``name`` active and apply its lighting to the device."""
     prof.load_profile(name)
     prof.set_active_profile_name(name)
-    nudge_daemon_reload()
+    _push_active_lighting(debug=debug)
+    return name
+
+
+def cycle_active_profile(direction: str = "next", *, debug: bool = False) -> str:
+    """Cycle the active profile and apply that profile's lighting."""
+    name = prof.cycle_profile(direction)
+    _push_active_lighting(debug=debug)
     return name
 
 
@@ -204,7 +240,7 @@ def save_profile_data(profile: dict[str, Any], name: str | None = None) -> Path:
     path = prof.save_profile(profile, name)
     saved = name or profile.get("name")
     if saved and saved == prof.get_active_profile_name():
-        nudge_daemon_reload()
+        _push_active_lighting()
     return path
 
 

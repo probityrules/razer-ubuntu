@@ -44,9 +44,9 @@ class TrayController:
         return self.daemon.stop_daemon()
 
     def cycle_profile_next(self) -> str:
-        from tartarus_v2.profiles import cycle_profile
+        from tartarus_v2 import actions
 
-        return cycle_profile("next")
+        return actions.cycle_active_profile("next")
 
     def check_for_update(self) -> Any:
         from tartarus_v2 import actions

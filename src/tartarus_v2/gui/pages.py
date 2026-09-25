@@ -522,7 +522,7 @@ def build_profiles_page(window: Any) -> Any:
                     ctrl.activate_profile(profile_name)
                     reload()
                     _refresh_header_daemon(window)
-                    _toast(window, f"Active: {profile_name} (daemon reloads if running)")
+                    _toast(window, f"Active: {profile_name}")
                 except Exception as exc:  # noqa: BLE001
                     _error(window, "Could not activate profile", str(exc))
 
