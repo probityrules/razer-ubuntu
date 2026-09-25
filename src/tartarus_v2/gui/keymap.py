@@ -22,10 +22,14 @@ button.keymap-key {
   border-radius: 8px;
 }
 button.keymap-key.keymap-scroll {
-  min-width: 72px;
+  min-width: 64px;
+  min-height: 52px;
+  padding: 4px;
+  border-radius: 14px;
 }
 button.keymap-key.keymap-mode {
-  min-width: 72px;
+  min-width: 64px;
+  min-height: 64px;
   border-radius: 999px;
 }
 button.keymap-key.keymap-stick {
@@ -37,6 +41,7 @@ button.keymap-key.keymap-stick {
 button.keymap-key.keymap-thumb {
   min-width: 168px;
   min-height: 64px;
+  border-radius: 16px;
 }
 button.keymap-key label.keymap-name {
   font-weight: 700;
@@ -63,8 +68,15 @@ button.keymap-key:disabled {
 frame.keymap-stick-ring {
   border: 2px solid alpha(@borders, 0.9);
   border-radius: 999px;
-  padding: 10px;
+  padding: 12px;
   background-color: alpha(@theme_bg_color, 0.35);
+}
+frame.keymap-scroll-wheel {
+  border: 2px solid alpha(@borders, 0.9);
+  border-radius: 28px;
+  padding: 8px;
+  background-color: alpha(@theme_bg_color, 0.35);
+  min-width: 76px;
 }
 """
 
@@ -269,19 +281,33 @@ def build_keymap_grid(
                 continue
             pad.attach(_make_key(logical), c, r, 1, 1)
 
-    # --- Right: scroll | mode + stick circle + thumb ----------------------
-    scroll_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-    scroll_col.set_valign(Gtk.Align.START)
+    # --- Scroll as one tall capsule (↑ / click / ↓ hit zones) -------------
+    scroll_inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    scroll_inner.set_halign(Gtk.Align.CENTER)
+    scroll_inner.set_valign(Gtk.Align.CENTER)
     for logical in KEYMAP_SCROLL_COLUMN:
-        scroll_col.append(
-            _make_key(logical, extra_classes=("keymap-scroll",), width=76, height=72)
+        seg = _make_key(
+            logical,
+            extra_classes=("keymap-scroll", "flat"),
+            width=64,
+            height=56,
+            max_chars=8,
         )
+        scroll_inner.append(seg)
 
+    scroll_wheel = Gtk.Frame()
+    scroll_wheel.add_css_class("keymap-scroll-wheel")
+    scroll_wheel.set_child(scroll_inner)
+    scroll_wheel.set_valign(Gtk.Align.CENTER)
+    scroll_wheel.set_halign(Gtk.Align.CENTER)
+    scroll_wheel.set_size_request(80, 200)
+
+    # --- Thumb cluster: mode (small) / stick circle / 20 (wide) -----------
     mode_btn = _make_key(
         "mode",
         extra_classes=("keymap-mode",),
-        width=76,
-        height=72,
+        width=64,
+        height=64,
         max_chars=8,
     )
     mode_btn.set_halign(Gtk.Align.CENTER)
@@ -360,21 +386,22 @@ def build_keymap_grid(
     )
     thumb.set_halign(Gtk.Align.CENTER)
 
-    thumb_cluster = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-    thumb_cluster.set_valign(Gtk.Align.START)
+    thumb_cluster = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+    thumb_cluster.set_valign(Gtk.Align.CENTER)
+    thumb_cluster.set_halign(Gtk.Align.CENTER)
     thumb_cluster.append(mode_btn)
     thumb_cluster.append(stick_ring)
     thumb_cluster.append(thumb)
 
-    # Mode aligns with Scr↑: put mode+stick beside scroll in a horizontal row
-    # where mode sits on the first scroll row height.
-    right = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-    right.set_valign(Gtk.Align.START)
-    right.append(scroll_col)
+    # Wireframe: pad | tall scroll | mode/stick/20
+    right = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+    right.set_valign(Gtk.Align.CENTER)
+    right.append(scroll_wheel)
     right.append(thumb_cluster)
 
     board = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
     board.set_halign(Gtk.Align.CENTER)
+    board.set_valign(Gtk.Align.CENTER)
     board.append(pad)
     board.append(right)
     outer.append(board)

@@ -76,16 +76,14 @@ ALL_LOGICAL_KEYS = sorted(LOGICAL_TO_CODE.keys()) + [
     "scroll_click",
 ]
 
-# Device-like Bindings layout:
-#   keypad 01–19 left; scroll column + mode/stick/20 on the right.
+# Device-like Bindings layout (wireframe):
+#   keypad 01–19 | tall scroll capsule | mode / stick circle / 20
 #
-#   [01] [02] [03] [04] [05]      [Scr↑]  (mode)
-#   [06] [07] [08] [09] [10]      [Scr•]    ┌ stick ┐
-#   [11] [12] [13] [14] [15]      [Scr↓]    │  ↑    │
-#   [16] [17] [18] [19]                     │ ←  →  │
-#                                           │  ↓    │
-#                                           └───────┘
-#                                              [20]
+#   [01] [02] [03] [04] [05]      ╔══╗   (mode)
+#   [06] [07] [08] [09] [10]      ║Scr║    ┌ stick ┐
+#   [11] [12] [13] [14] [15]      ║whl║    │  ↑←→↓ │
+#   [16] [17] [18] [19]           ╚══╝    └───────┘
+#                                            [20]
 KEYMAP_PAD_LAYOUT: list[list[str | None]] = [
     ["key_01", "key_02", "key_03", "key_04", "key_05"],
     ["key_06", "key_07", "key_08", "key_09", "key_10"],
@@ -105,19 +103,18 @@ KEYMAP_ASCII = """
 Tartarus V2 logical key map (for bindings / profile JSON)
 =========================================================
 
-  [01] [02] [03] [04] [05]      [Scr↑]  (mode)
-  [06] [07] [08] [09] [10]      [Scr•]    ┌ stick ┐
-  [11] [12] [13] [14] [15]      [Scr↓]    │   ↑   │
-  [16] [17] [18] [19]                     │ ←   → │
-                                          │   ↓   │
-                                          └───────┘
-                                             [20]
+  [01] [02] [03] [04] [05]      ╔══╗   (mode)
+  [06] [07] [08] [09] [10]      ║Scr║    ┌ stick ┐
+  [11] [12] [13] [14] [15]      ║whl║    │  ↑←→↓ │
+  [16] [17] [18] [19]           ╚══╝    └───────┘
+                                           [20]
 
 Notes:
   - mode is often used as Hypershift (hold for secondary layer)
   - key 20 is the hyperesponse thumb key (default Space), not a fifth keypad key
   - the bottom keypad row is keys 16–19 only
-  - scroll sits beside the pad; stick directions share one circular cluster
+  - scroll is one tall capsule (↑ / click / ↓ hit zones)
+  - stick directions share one circular cluster
 """.strip()
 
 
