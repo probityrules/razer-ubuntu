@@ -312,24 +312,38 @@ def test_short_label_keys() -> None:
 
     from tartarus_v2.input.keys import (
         binding_picker_choices,
+        binding_source_kind,
         format_binding_for_entry,
         parse_binding_from_entry,
+        validate_binding_text,
     )
 
-    choices = binding_picker_choices()
-    assert choices[0] == ("Insert…", None)
-    assert ("Clear binding", "") in choices
-    assert ("ctrl", "ctrl") in choices
-    assert ("F1", "F1") in choices
-    assert ("ctrl+c", "ctrl+c") in choices
-    assert ("Profile next", "profile_next") in choices
+    assert binding_source_kind("scroll_up") == "scroll"
+    assert binding_source_kind("key_01") == "key"
+    key_choices = binding_picker_choices(kind="key")
+    assert key_choices[0] == ("Insert…", None)
+    assert ("Clear binding", "") in key_choices
+    assert ("ctrl", "ctrl") in key_choices
+    assert ("F1", "F1") in key_choices
+    assert ("ctrl+c", "ctrl+c") in key_choices
+    assert ("Profile next", "profile_next") in key_choices
+    assert ("Mouse wheel up", "scroll_up") not in key_choices
+    scroll_choices = binding_picker_choices(kind="scroll")
+    assert ("Mouse wheel up", "scroll_up") in scroll_choices
+    assert ("Mouse wheel left", "scroll_left") in scroll_choices
+    assert ("a", "a") not in scroll_choices
     assert parse_binding_from_entry("") is None
     assert parse_binding_from_entry("  ctrl+c ") == "ctrl+c"
     assert parse_binding_from_entry("profile_next") == {"type": "profile_next"}
     assert parse_binding_from_entry("PROFILE_PREV") == {"type": "profile_prev"}
+    assert parse_binding_from_entry("scroll_left") == "scroll_left"
     assert format_binding_for_entry({"type": "profile_next"}) == "profile_next"
     assert format_binding_for_entry("a") == "a"
     assert format_binding_for_entry({"type": "macro", "steps": [{"tap": "ctrl+v"}]}) == "ctrl+v"
+    assert validate_binding_text("scroll_left", source_kind="key")
+    assert validate_binding_text("scroll_left", source_kind="scroll") is None
+    assert validate_binding_text("ctrl+c", source_kind="key") is None
+    assert validate_binding_text("profile_next", source_kind="scroll") is None
 
 
 def test_remapper_skips_virtual_keyboard_device() -> None:

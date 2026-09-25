@@ -180,3 +180,46 @@ def test_uinput_failure_explains_default_keys() -> None:
     assert "missing" in missing
     other = uinput_failure_message(OSError(errno.EINVAL, "bad"))
     assert "/dev/uinput" in other
+
+
+def test_unknown_key_token_does_not_raise() -> None:
+    from types import SimpleNamespace
+
+    remapper = Remapper({})
+    remapper._ecodes = SimpleNamespace(KEY_A=30)  # noqa: SLF001
+    assert remapper.resolve_key_token("scroll_left") == []
+    assert remapper.resolve_key_token("not_a_real_key_zzzz") == []
+    assert remapper.resolve_key_token("a") == [30]
+
+
+def test_wheel_binding_emits_rel_not_key() -> None:
+    from types import SimpleNamespace
+
+    remapper = Remapper({})
+    remapper._ecodes = SimpleNamespace(  # noqa: SLF001
+        EV_REL=2,
+        REL_WHEEL=8,
+        REL_HWHEEL=6,
+        KEY_A=30,
+    )
+    writes: list[tuple[int, int, int]] = []
+
+    class FakeUI:
+        def write(self, etype: int, code: int, value: int) -> None:
+            writes.append((etype, code, value))
+
+        def syn(self) -> None:
+            pass
+
+    remapper._ui = FakeUI()  # noqa: SLF001
+    remapper._logged_output = False  # noqa: SLF001
+    remapper._apply_binding("scroll_left", True)  # noqa: SLF001
+    remapper._apply_binding("scroll_right", True)  # noqa: SLF001
+    remapper._apply_binding("scroll_up", True)  # noqa: SLF001
+    assert writes == [
+        (2, 6, -1),
+        (2, 6, 1),
+        (2, 8, 1),
+    ]
+    # Unknown keyboard token must not raise.
+    remapper._apply_binding("scroll_left_typo", True)  # noqa: SLF001

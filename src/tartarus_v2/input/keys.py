@@ -208,6 +208,32 @@ BINDING_ACTION_TOKENS: dict[str, dict[str, str]] = {
     "profile_prev": {"type": "profile_prev"},
 }
 
+# Physical scroll-wheel logical keys (input side).
+SCROLL_LOGICAL_KEYS = frozenset({"scroll_up", "scroll_down", "scroll_click"})
+
+# Output tokens that emit mouse-wheel relative events (not KEY_*).
+# Values are (REL code name, signed ticks) resolved against evdev.ecodes.
+WHEEL_OUTPUT_TOKENS: dict[str, tuple[str, int]] = {
+    "scroll_up": ("REL_WHEEL", 1),
+    "scroll_down": ("REL_WHEEL", -1),
+    "wheel_up": ("REL_WHEEL", 1),
+    "wheel_down": ("REL_WHEEL", -1),
+    "scroll_left": ("REL_HWHEEL", -1),
+    "scroll_right": ("REL_HWHEEL", 1),
+    "wheel_left": ("REL_HWHEEL", -1),
+    "wheel_right": ("REL_HWHEEL", 1),
+}
+
+
+def binding_source_kind(logical: str | None) -> str:
+    """Picker/validation kind for a physical key: ``scroll`` or ``key``."""
+    if not logical:
+        return "key"
+    name = canonical_logical(logical)
+    if name in SCROLL_LOGICAL_KEYS or logical in SCROLL_LOGICAL_KEYS:
+        return "scroll"
+    return "key"
+
 
 def format_binding_for_entry(value: Any) -> str:
     """Flatten a profile binding value into editable entry text."""
@@ -219,6 +245,8 @@ def format_binding_for_entry(value: Any) -> str:
         kind = value.get("type", "key")
         if kind in BINDING_ACTION_TOKENS:
             return str(kind)
+        if kind == "wheel":
+            return str(value.get("dir") or value.get("key") or "scroll_up")
         if kind == "macro":
             steps = value.get("steps") or []
             if steps and isinstance(steps[0], dict):
@@ -234,7 +262,8 @@ def parse_binding_from_entry(text: str) -> Any | None:
     """Parse entry text into a profile binding value.
 
     Empty → ``None`` (clear). ``profile_next`` / ``profile_prev`` → action
-    dicts. Everything else stays a string (letters, aliases, ``ctrl+c`` chords).
+    dicts. Wheel tokens stay as strings (remapper emits REL_*). Everything
+    else stays a string (letters, aliases, ``ctrl+c`` chords).
     """
     cleaned = (text or "").strip()
     if not cleaned:
@@ -242,14 +271,83 @@ def parse_binding_from_entry(text: str) -> Any | None:
     lower = cleaned.lower()
     if lower in BINDING_ACTION_TOKENS:
         return dict(BINDING_ACTION_TOKENS[lower])
+    if lower in WHEEL_OUTPUT_TOKENS:
+        return lower
     return cleaned
 
 
-def binding_picker_choices() -> list[tuple[str, str | None]]:
+def _token_parts(text: str) -> list[str]:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return []
+    if "+" in cleaned and not cleaned.upper().startswith("KEY_"):
+        return [p.strip() for p in cleaned.split("+") if p.strip()]
+    return [cleaned]
+
+
+def validate_binding_text(text: str, *, source_kind: str = "key") -> str | None:
+    """Return an error message if ``text`` is not valid for this source kind.
+
+    Empty text is always valid (clears the binding).
+    """
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+    lower = cleaned.lower()
+    if lower in BINDING_ACTION_TOKENS:
+        return None
+
+    parts = _token_parts(cleaned)
+    if source_kind == "scroll":
+        # Scroll physical keys: actions, wheel emits, or normal key tokens.
+        for part in parts:
+            pl = part.lower()
+            if pl in BINDING_ACTION_TOKENS or pl in WHEEL_OUTPUT_TOKENS:
+                continue
+            if pl in OUTPUT_ALIASES:
+                continue
+            if len(pl) == 1 and pl.isalnum():
+                continue
+            if pl.startswith("f") and pl[1:].isdigit() and 1 <= int(pl[1:]) <= 24:
+                continue
+            if pl.startswith("key_") or pl.startswith("btn_"):
+                continue
+            # Allow common words the remapper maps to KEY_*
+            if pl.isalpha() or pl.isalnum():
+                continue
+            return (
+                f"Unknown binding {part!r}. Use Insert… or a key name "
+                "(e.g. space, ctrl+c, scroll_up)."
+            )
+        return None
+
+    # Keyboard / stick keys: never allow wheel-only tokens (they are not KEY_*).
+    for part in parts:
+        pl = part.lower()
+        if pl in WHEEL_OUTPUT_TOKENS:
+            return (
+                f"{part!r} is a mouse-wheel output — bind it on the scroll "
+                "wheel keys, or pick a keyboard key from Insert…"
+            )
+        if pl in BINDING_ACTION_TOKENS:
+            continue
+        if pl in OUTPUT_ALIASES:
+            continue
+        if len(pl) == 1 and pl.isalnum():
+            continue
+        if pl.startswith("f") and pl[1:].isdigit() and 1 <= int(pl[1:]) <= 24:
+            continue
+        if pl.isalpha() or pl.isalnum() or pl.startswith("key_") or pl.startswith("btn_"):
+            continue
+        return f"Unknown binding {part!r}. Use Insert… or a key/chord name."
+    return None
+
+
+def binding_picker_choices(*, kind: str = "key") -> list[tuple[str, str | None]]:
     """Labels and values for the Bindings Insert dropdown.
 
+    ``kind`` is ``scroll`` (physical wheel) or ``key`` (pad / stick / thumb).
     First row is a no-op placeholder (``None``). ``\"\"`` clears the binding.
-    Other values are tokens suitable for :func:`parse_binding_from_entry`.
     """
     items: list[tuple[str, str | None]] = [
         ("Insert…", None),
@@ -257,6 +355,29 @@ def binding_picker_choices() -> list[tuple[str, str | None]]:
         ("Profile next", "profile_next"),
         ("Profile previous", "profile_prev"),
     ]
+
+    if kind == "scroll":
+        items.extend(
+            [
+                ("Mouse wheel up", "scroll_up"),
+                ("Mouse wheel down", "scroll_down"),
+                ("Mouse wheel left", "scroll_left"),
+                ("Mouse wheel right", "scroll_right"),
+            ]
+        )
+        for name in (
+            "space",
+            "enter",
+            "tab",
+            "esc",
+            "backspace",
+            "ctrl",
+            "shift",
+            "alt",
+            "super",
+        ):
+            items.append((name, name))
+        return items
 
     modifiers = (
         "ctrl",

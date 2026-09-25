@@ -205,7 +205,11 @@ class Remapper:
         return evdev
 
     def resolve_key_token(self, token: Any) -> list[int]:
-        """Resolve a binding token into one or more Linux keycodes."""
+        """Resolve a binding token into one or more Linux keycodes.
+
+        Unknown names return an empty list (and log) instead of raising, so a
+        bad profile entry cannot crash the remap daemon.
+        """
         ecodes = self._ecodes
         if isinstance(token, int):
             return [token]
@@ -215,9 +219,16 @@ class Remapper:
                 out.extend(self.resolve_key_token(t))
             return out
         if not isinstance(token, str):
-            raise ValueError(f"Invalid key token: {token!r}")
+            log.warning("Invalid key token %r; skipping", token)
+            return []
 
         name = token.strip()
+        if not name:
+            return []
+        lower = name.lower()
+        # Wheel tokens are not EV_KEY — callers must use _emit_wheel.
+        if lower in keytable.WHEEL_OUTPUT_TOKENS:
+            return []
         if "+" in name and not name.startswith("KEY_"):
             parts = [p.strip() for p in name.split("+") if p.strip()]
             out = []
@@ -225,11 +236,9 @@ class Remapper:
                 out.extend(self.resolve_key_token(p))
             return out
 
-        lower = name.lower()
         if lower in keytable.OUTPUT_ALIASES:
             name = keytable.OUTPUT_ALIASES[lower]
         if not name.startswith("KEY_") and not name.startswith("BTN_"):
-            # single letter / digit
             if len(name) == 1 and name.isalnum():
                 name = f"KEY_{name.upper()}"
             else:
@@ -237,8 +246,29 @@ class Remapper:
 
         code = getattr(ecodes, name, None)
         if code is None:
-            raise ValueError(f"Unknown key name: {token!r} (resolved {name})")
+            log.warning("Unknown key name %r (resolved %s); skipping", token, name)
+            return []
         return [int(code)]
+
+    def _emit_wheel(self, token: str) -> None:
+        """Emit one mouse-wheel tick on the virtual device."""
+        assert self._ui is not None
+        ecodes = self._ecodes
+        if ecodes is None:
+            return
+        spec = keytable.WHEEL_OUTPUT_TOKENS.get(token.lower())
+        if spec is None:
+            return
+        rel_name, ticks = spec
+        code = getattr(ecodes, rel_name, None)
+        if code is None:
+            log.warning("Wheel axis %s missing from evdev; skipping %r", rel_name, token)
+            return
+        self._ui.write(ecodes.EV_REL, int(code), int(ticks))
+        self._ui.syn()
+        if not self._logged_output:
+            self._logged_output = True
+            log.info("Virtual wheel output active (first %s → %s %s)", token, rel_name, ticks)
 
     def find_devices(self) -> list[Any]:
         evdev = self._require_evdev()
@@ -528,7 +558,6 @@ class Remapper:
         if isinstance(binding, dict):
             kind = binding.get("type", "key")
             if kind == "hypershift":
-                # Should not appear as output binding; handled separately
                 return
             if kind == "profile_next" and pressed:
                 if self.on_profile_switch:
@@ -538,24 +567,44 @@ class Remapper:
                 if self.on_profile_switch:
                     self.on_profile_switch("prev")
                 return
+            if kind == "wheel" and pressed:
+                direction = str(binding.get("dir") or binding.get("key") or "")
+                if direction:
+                    self._emit_wheel(direction)
+                return
             if kind == "macro" and pressed:
                 steps = binding.get("steps") or []
                 play_macro(steps, self._emit, self.resolve_key_token)
                 return
             if kind == "key":
                 codes = self.resolve_key_token(binding.get("keys") or binding.get("key"))
-                self._emit(codes, pressed)
+                if codes:
+                    self._emit(codes, pressed)
                 return
             log.warning("Unknown binding type %r", kind)
             return
 
-        # string / list shorthand
-        if pressed:
+        if isinstance(binding, str):
+            lower = binding.strip().lower()
+            if lower in keytable.WHEEL_OUTPUT_TOKENS:
+                if pressed:
+                    self._emit_wheel(lower)
+                return
+            if pressed:
+                codes = self.resolve_key_token(binding)
+                if not codes:
+                    return
+                self._emit(codes, True)
+                time.sleep(0.01)
+                self._emit(list(reversed(codes)), False)
+            return
+
+        if isinstance(binding, list) and pressed:
             codes = self.resolve_key_token(binding)
-            self._emit(codes, True)
-            time.sleep(0.01)
-            self._emit(list(reversed(codes)), False)
-        # for hold-style we need press/release; shorthand taps on press only
+            if codes:
+                self._emit(codes, True)
+                time.sleep(0.01)
+                self._emit(list(reversed(codes)), False)
 
     def _handle_key(self, logical: str, pressed: bool) -> None:
         hs_key = keytable.canonical_logical(str(self.profile.get("hypershift_key") or ""))
@@ -580,21 +629,25 @@ class Remapper:
             layer = "hypershift" if self._hypershift_held else "standard"
             log.debug("layer=%s key=%s pressed=%s binding=%r", layer, logical, pressed, binding)
 
-        # For string bindings, support hold (press/release) when single key
+        # Single non-chord key: hold semantics (press/release).
         if isinstance(binding, str) and "+" not in binding:
-            try:
-                codes = self.resolve_key_token(binding)
+            lower = binding.strip().lower()
+            if lower in keytable.WHEEL_OUTPUT_TOKENS:
+                if pressed:
+                    self._emit_wheel(lower)
+                return
+            codes = self.resolve_key_token(binding)
+            if codes:
                 self._emit(codes, pressed)
                 return
-            except ValueError:
-                pass
 
         if isinstance(binding, dict) and binding.get("type", "key") == "key":
             codes = self.resolve_key_token(binding.get("keys") or binding.get("key"))
-            self._emit(codes, pressed)
+            if codes:
+                self._emit(codes, pressed)
             return
 
-        # macros / combos / profile actions fire on press
+        # macros / combos / profile / wheel actions fire on press
         if pressed:
             self._apply_binding(binding, True)
 

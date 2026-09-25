@@ -16,10 +16,12 @@ from tartarus_v2.gui.workers import run_in_thread
 from tartarus_v2.input.keys import (
     ALL_LOGICAL_KEYS,
     binding_picker_choices,
+    binding_source_kind,
     describe_logical,
     format_binding_for_entry,
     parse_binding_from_entry,
     strip_hypershift_key_bindings,
+    validate_binding_text,
 )
 
 
@@ -705,30 +707,54 @@ def build_bindings_page(window: Any) -> Any:
     suppress_profile: dict[str, bool] = {"busy": False}
     highlight: dict[str, Any] = {"monitor": None}
     suppress_picker: dict[str, bool] = {"busy": False}
+    picker_state: dict[str, Any] = {
+        "kind": "key",
+        "labels": [],
+        "values": [],
+        "dropdowns": [],
+    }
 
-    picker_choices = binding_picker_choices()
-    picker_labels = [label for label, _value in picker_choices]
-    picker_values = [value for _label, value in picker_choices]
+    def _load_picker_kind(kind: str) -> None:
+        choices = binding_picker_choices(kind=kind)
+        picker_state["kind"] = kind
+        picker_state["labels"] = [label for label, _value in choices]
+        picker_state["values"] = [value for _label, value in choices]
+        suppress_picker["busy"] = True
+        try:
+            for dropdown in picker_state["dropdowns"]:
+                model = dropdown.get_model()
+                n = model.get_n_items() if model is not None else 0
+                if model is not None and n:
+                    model.splice(0, n, [])
+                if model is None:
+                    model = Gtk.StringList.new(picker_state["labels"])
+                    dropdown.set_model(model)
+                else:
+                    model.splice(0, 0, picker_state["labels"])
+                dropdown.set_selected(0)
+        finally:
+            suppress_picker["busy"] = False
 
     def _attach_binding_picker(row: Any, entry: Any) -> Any:
-        model = Gtk.StringList.new(picker_labels)
+        model = Gtk.StringList.new(["Insert…"])
         dropdown = Gtk.DropDown(model=model)
         dropdown.set_selected(0)
         dropdown.set_valign(Gtk.Align.CENTER)
-        dropdown.set_size_request(140, -1)
+        dropdown.set_size_request(160, -1)
         try:
             dropdown.set_enable_search(True)
         except AttributeError:
             pass
-        dropdown.set_tooltip_text("Insert a key, modifier, chord, or action")
+        dropdown.set_tooltip_text("Insert a key, wheel action, or command")
 
         def _on_pick(_dd: Any = None, _pspec: Any = None) -> None:
             if suppress_picker["busy"] or state["suppress_entries"]:
                 return
+            values = picker_state["values"]
             idx = int(dropdown.get_selected())
-            if idx <= 0 or idx >= len(picker_values):
+            if idx <= 0 or idx >= len(values):
                 return
-            value = picker_values[idx]
+            value = values[idx]
             if value is None:
                 return
             entry.set_text(value)
@@ -741,10 +767,12 @@ def build_bindings_page(window: Any) -> Any:
         dropdown.connect("notify::selected", _on_pick)
         row.add_suffix(dropdown)
         row.add_suffix(entry)
+        picker_state["dropdowns"].append(dropdown)
         return dropdown
 
     normal_picker = _attach_binding_picker(normal_row, normal_entry)
     hs_picker = _attach_binding_picker(hs_entry_row, hs_entry)
+    _load_picker_kind("key")
     normal_entry.set_sensitive(False)
     hs_entry.set_sensitive(False)
     normal_picker.set_sensitive(False)
@@ -834,12 +862,23 @@ def build_bindings_page(window: Any) -> Any:
                 hs_entry.set_sensitive(False)
                 normal_picker.set_sensitive(False)
                 hs_picker.set_sensitive(False)
+                _load_picker_kind("key")
                 return
+            kind = binding_source_kind(logical)
+            if picker_state.get("kind") != kind:
+                _load_picker_kind(kind)
             selected_row.set_subtitle(describe_logical(logical))
             normal_entry.set_sensitive(True)
             hs_entry.set_sensitive(True)
             normal_picker.set_sensitive(True)
             hs_picker.set_sensitive(True)
+            tip = (
+                "Insert wheel, profile action, or key"
+                if kind == "scroll"
+                else "Insert a key, modifier, chord, or action"
+            )
+            normal_picker.set_tooltip_text(tip)
+            hs_picker.set_tooltip_text(tip)
             normal_entry.set_text(
                 format_binding_for_entry(_draft_bindings("standard").get(logical))
             )
@@ -970,6 +1009,19 @@ def build_bindings_page(window: Any) -> Any:
         if hs_key and logical == hs_key:
             return
         text = entry.get_text().strip()
+        kind = binding_source_kind(logical)
+        err = validate_binding_text(text, source_kind=kind)
+        if err:
+            _toast(window, err)
+            # Revert the entry to the last staged value so the draft stays clean.
+            state["suppress_entries"] = True
+            try:
+                entry.set_text(
+                    format_binding_for_entry(_draft_bindings(layer).get(logical))
+                )
+            finally:
+                state["suppress_entries"] = False
+            return
         data = state["draft"]
         data.setdefault(layer, {})
         bindings = dict((data.get(layer) or {}).get("bindings") or {})
@@ -1018,12 +1070,27 @@ def build_bindings_page(window: Any) -> Any:
             profile = state["profile"]
             hs_key = draft.get("hypershift_key") or keys[hs_row.get_selected()]
             # Persist both layers + hypershift key in one shot (HS key not bound).
+            # Drop legacy crash tokens (e.g. scroll_left on a pad key) before save.
+            def _sanitize(bindings: dict[str, Any]) -> dict[str, Any]:
+                cleaned: dict[str, Any] = {}
+                for logical, value in dict(bindings or {}).items():
+                    text = format_binding_for_entry(value)
+                    err = validate_binding_text(
+                        text, source_kind=binding_source_kind(logical)
+                    )
+                    if err:
+                        continue
+                    parsed = parse_binding_from_entry(text)
+                    if parsed is not None:
+                        cleaned[logical] = parsed
+                return cleaned
+
             std = strip_hypershift_key_bindings(
-                dict((draft.get("standard") or {}).get("bindings") or {}),
+                _sanitize(dict((draft.get("standard") or {}).get("bindings") or {})),
                 hs_key,
             )
             hyp = strip_hypershift_key_bindings(
-                dict((draft.get("hypershift") or {}).get("bindings") or {}),
+                _sanitize(dict((draft.get("hypershift") or {}).get("bindings") or {})),
                 hs_key,
             )
             ctrl.save_bindings(profile, "standard", std, hs_key)
