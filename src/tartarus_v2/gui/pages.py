@@ -188,7 +188,13 @@ def build_lighting_page(window: Any) -> Any:
 
     ctrl = LightingController()
     page = Adw.PreferencesPage(title="Lighting", name="lighting")
-    group = Adw.PreferencesGroup(title="Effects", description="CLI: set-effect / set-brightness")
+    group = Adw.PreferencesGroup(
+        title="Effects",
+        description="Apply saves colour to the profile and lights the pad (daemon or direct).",
+    )
+
+    # Effects that actually use the primary colour pickers.
+    _COLOR_EFFECTS = frozenset({"static", "breath", "reactive", "starlight"})
 
     effect_row = Adw.ComboRow(title="Effect")
     effect_row.set_model(Gtk.StringList.new(list(ctrl.list_effects())))
@@ -262,64 +268,148 @@ def build_lighting_page(window: Any) -> Any:
     from tartarus_v2.gui.controllers import ProfilesController
 
     profiles_ctrl = ProfilesController()
-    save_switch = Gtk.Switch()
-    save_switch.set_valign(Gtk.Align.CENTER)
-    save_row = Adw.ActionRow(
-        title="Save to profile",
-        subtitle="Write lighting settings into the selected profile JSON",
-    )
-    save_row.add_suffix(save_switch)
-    save_row.set_activatable_widget(save_switch)
-
     profile_list = Gtk.StringList()
-    profile_row = Adw.ComboRow(title="Target profile")
+    profile_row = Adw.ComboRow(title="Profile", subtitle="Load a profile")
     profile_row.set_model(profile_list)
-    profile_row.set_sensitive(False)
     profile_names: list[str] = []
+    state: dict[str, Any] = {"profile": None}
+    suppress: dict[str, bool] = {"busy": False}
 
-    def _reload_profiles(*_args: Any) -> None:
+    profiles_btn = Gtk.Button(label="Profiles")
+    profiles_btn.set_tooltip_text("Open the Profiles tab")
+    profiles_btn.add_css_class("flat")
+    profile_row.add_suffix(profiles_btn)
+
+    def _current_effect_name() -> str:
+        effects = list(ctrl.list_effects())
+        idx = effect_row.get_selected()
+        if 0 <= idx < len(effects):
+            return effects[idx]
+        return "static"
+
+    def _sync_color_rows(*_args: Any) -> None:
+        uses_color = _current_effect_name() in _COLOR_EFFECTS
+        rgb_row.set_sensitive(uses_color)
+        rgb2_row.set_sensitive(uses_color)
+        if uses_color:
+            rgb_row.set_subtitle("")
+        else:
+            rgb_row.set_subtitle("Not used by this effect (still stored on Apply)")
+
+    def _profile_subtitle(message: str | None = None) -> None:
+        parts: list[str] = []
+        if state.get("profile"):
+            parts.append(str(state["profile"]))
+        if message:
+            parts.append(message)
+        profile_row.set_subtitle(" · ".join(parts) if parts else "Load a profile")
+
+    def _hydrate_from_profile(name: str, *, toast: bool = False) -> None:
+        suppress["busy"] = True
+        try:
+            data = profiles_ctrl.show_profile(name)
+            lighting = dict(data.get("lighting") or {})
+            effects = list(ctrl.list_effects())
+            effect = str(lighting.get("effect") or "spectrum")
+            if effect in effects:
+                effect_row.set_selected(effects.index(effect))
+            primary.set_rgba(_rgba_from_hex(str(lighting.get("rgb") or "00FF00")))
+            rgb2 = lighting.get("rgb2")
+            if rgb2:
+                use_secondary.set_active(True)
+                secondary.set_rgba(_rgba_from_hex(str(rgb2)))
+            else:
+                use_secondary.set_active(False)
+            direction.set_value(int(lighting.get("direction", 1)))
+            speed.set_value(int(lighting.get("speed", 2)))
+            if lighting.get("brightness") is not None:
+                bright.set_value(int(lighting["brightness"]))
+            state["profile"] = name
+            _sync_color_rows()
+            _sync_secondary_sensitive()
+            _profile_subtitle(f"loaded {name}")
+            if toast:
+                _toast(window, f"Loaded {name}")
+        except Exception as exc:  # noqa: BLE001
+            _error(window, "Could not load profile", str(exc))
+        finally:
+            suppress["busy"] = False
+
+    def _reload_profile_combo(*, prefer: str | None = None) -> None:
         nonlocal profile_names
-        items = profiles_ctrl.refresh_profiles()
-        n = profile_list.get_n_items()
-        if n:
-            profile_list.splice(0, n, [])
-        profile_names = []
-        active_idx = 0
-        for i, item in enumerate(items):
-            label = item["name"] + (" (active)" if item["active"] else "")
-            profile_list.append(label)
-            profile_names.append(item["name"])
-            if item["active"]:
-                active_idx = i
-        if profile_names:
-            profile_row.set_selected(active_idx)
+        suppress["busy"] = True
+        try:
+            items = profiles_ctrl.refresh_profiles()
+            n = profile_list.get_n_items()
+            if n:
+                profile_list.splice(0, n, [])
+            profile_names = []
+            select_idx = 0
+            for i, item in enumerate(items):
+                label = item["name"] + (" (active)" if item["active"] else "")
+                profile_list.append(label)
+                profile_names.append(item["name"])
+                if prefer and item["name"] == prefer:
+                    select_idx = i
+                elif prefer is None and item["active"]:
+                    select_idx = i
+            if profile_names:
+                profile_row.set_selected(select_idx)
+        finally:
+            suppress["busy"] = False
 
-    def _sync_save_sensitive(*_args: Any) -> None:
-        profile_row.set_sensitive(save_switch.get_active())
+    def _switch_to_profile(name: str, *, toast: bool = True) -> None:
+        """Activate + load lighting UI (same as Bindings dropdown)."""
+        previous = state.get("profile")
+        profiles_ctrl.activate_profile(name)
+        _hydrate_from_profile(name, toast=toast and previous != name)
+        _reload_profile_combo(prefer=name)
+        _refresh_header_daemon(window)
 
-    save_switch.connect("notify::active", _sync_save_sensitive)
-    _reload_profiles()
-    _sync_save_sensitive()
+    def _on_profile_selected(_row: Any = None, _pspec: Any = None) -> None:
+        if suppress["busy"] or not profile_names:
+            return
+        idx = profile_row.get_selected()
+        if not (0 <= idx < len(profile_names)):
+            return
+        name = profile_names[idx]
+        if state.get("profile") == name:
+            _refresh_header_daemon(window)
+            return
+        try:
+            _switch_to_profile(name, toast=True)
+        except Exception as exc:  # noqa: BLE001
+            _error(window, "Could not switch profile", str(exc))
 
-    refresh_profiles_btn = Gtk.Button(label="Refresh")
-    refresh_profiles_btn.connect("clicked", _reload_profiles)
-    refresh_profiles_row = Adw.ActionRow(title="Refresh profile list")
-    refresh_profiles_row.add_suffix(refresh_profiles_btn)
+    def _go_profiles(_b: Any = None) -> None:
+        navigate = getattr(window, "navigate_to", None)
+        if callable(navigate):
+            navigate("profiles")
+        else:
+            _toast(window, "Open Profiles from the sidebar")
+
+    profiles_btn.connect("clicked", _go_profiles)
+    profile_row.connect("notify::selected", _on_profile_selected)
+    effect_row.connect("notify::selected", _sync_color_rows)
+    _reload_profile_combo()
+    if profile_names:
+        _hydrate_from_profile(profile_names[profile_row.get_selected()], toast=False)
 
     def _apply(_btn: Any = None) -> None:
-        effect = ctrl.list_effects()[effect_row.get_selected()]
+        effect = _current_effect_name()
         rgb_hex = _hex_from_rgba(primary.get_rgba())
         rgb2_hex = (
             _hex_from_rgba(secondary.get_rgba()) if use_secondary.get_active() else None
         )
-        target_profile = None
-        if save_switch.get_active() and profile_names:
+        # Dropdown activates the profile; Apply always targets the active one.
+        target_profile = state.get("profile")
+        if not target_profile and profile_names:
             idx = profile_row.get_selected()
             if 0 <= idx < len(profile_names):
                 target_profile = profile_names[idx]
 
-        def work() -> None:
-            ctrl.apply_effect(
+        def work() -> str:
+            return ctrl.apply_effect(
                 effect,
                 rgb=rgb_hex,
                 rgb2=rgb2_hex,
@@ -327,40 +417,66 @@ def build_lighting_page(window: Any) -> Any:
                 speed=int(speed.get_value()),
                 brightness=int(bright.get_value()),
                 debug=getattr(window, "debug", False),
-                save_to_profile=bool(target_profile),
                 profile_name=target_profile,
             )
 
-        def done(_result: Any, error: BaseException | None) -> None:
+        def done(saved: Any, error: BaseException | None) -> None:
             if error:
                 _error(window, "Lighting error", str(error))
-            elif target_profile:
-                _toast(window, f"Applied {effect} (saved to {target_profile})")
-            else:
-                _toast(window, f"Applied {effect}")
+                return
+            name = saved or target_profile or "profile"
+            note = ""
+            if effect not in _COLOR_EFFECTS:
+                note = " · colour stored for later"
+            _toast(window, f"Applied {effect} · saved to {name}{note}")
+            _profile_subtitle(f"applied {effect}")
 
         run_in_thread(work, done)
 
     apply_btn = Gtk.Button(label="Apply")
     apply_btn.add_css_class("suggested-action")
     apply_btn.connect("clicked", _apply)
-    apply_row = Adw.ActionRow(title="Apply effect")
+    apply_row = Adw.ActionRow(
+        title="Apply",
+        subtitle="Writes the active profile and lights the pad immediately",
+    )
     apply_row.add_suffix(apply_btn)
 
     for row in (
+        profile_row,
         effect_row,
         rgb_row,
         rgb2_row,
         dir_row,
         speed_row,
         bright_row,
-        save_row,
-        profile_row,
-        refresh_profiles_row,
         apply_row,
     ):
         group.add(row)
     page.add(group)
+
+    def _on_map(_p: Any = None) -> None:
+        _reload_profile_combo()
+        try:
+            from tartarus_v2.profiles import get_active_profile_name
+
+            active = get_active_profile_name()
+            if state.get("profile") == active:
+                if active in profile_names:
+                    suppress["busy"] = True
+                    try:
+                        profile_row.set_selected(profile_names.index(active))
+                    finally:
+                        suppress["busy"] = False
+                _hydrate_from_profile(active, toast=False)
+                _refresh_header_daemon(window)
+                return
+            _switch_to_profile(active, toast=False)
+        except Exception:  # noqa: BLE001
+            if profile_names:
+                _hydrate_from_profile(profile_names[profile_row.get_selected()], toast=False)
+
+    page.connect("map", _on_map)
     return page
 
 

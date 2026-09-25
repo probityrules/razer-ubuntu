@@ -51,7 +51,7 @@ def device_info(debug: bool = False) -> dict[str, Any]:
         }
 
 
-def _apply_lighting_via_daemon(
+def _lighting_dict(
     effect: str,
     *,
     rgb: str,
@@ -59,11 +59,7 @@ def _apply_lighting_via_daemon(
     direction: int,
     speed: int,
     brightness: int | None,
-) -> None:
-    """Ask the running daemon to apply lighting. Do not open the keypad again."""
-    import logging
-
-    data = prof.load_profile(prof.get_active_profile_name())
+) -> dict[str, Any]:
     lighting: dict[str, Any] = {
         "effect": effect,
         "rgb": rgb,
@@ -74,23 +70,28 @@ def _apply_lighting_via_daemon(
         lighting["brightness"] = brightness
     if rgb2:
         lighting["rgb2"] = rgb2
+    return lighting
+
+
+def _persist_lighting(profile_name: str, lighting: dict[str, Any]) -> str:
+    """Write lighting into a profile JSON. Returns the profile name saved."""
+    data = prof.load_profile(profile_name)
     data["lighting"] = lighting
-    prof.save_profile(data, data.get("name"))
-    detail = nudge_daemon_reload()
-    logging.getLogger("tartarus_v2.hid").info(
-        "Daemon already owns the keypad; applied %s via profile reload (%s)",
-        effect,
-        detail,
-    )
+    name = profile_name or data.get("name") or prof.get_active_profile_name()
+    prof.save_profile(data, name)
+    return name
 
 
 def set_brightness(value: int, debug: bool = False) -> None:
+    """Set brightness on the pad and persist it to the active profile."""
+    name = prof.get_active_profile_name()
+    data = prof.load_profile(name)
+    lighting = dict(data.get("lighting") or {})
+    lighting["brightness"] = int(value)
+    data["lighting"] = lighting
+    prof.save_profile(data, name)
+
     if _running_daemon() is not None:
-        data = prof.load_profile(prof.get_active_profile_name())
-        lighting = dict(data.get("lighting") or {})
-        lighting["brightness"] = int(value)
-        data["lighting"] = lighting
-        prof.save_profile(data, data.get("name"))
         nudge_daemon_reload()
         return
 
@@ -110,20 +111,50 @@ def set_effect(
     speed: int = 2,
     brightness: int | None = None,
     debug: bool = False,
-) -> None:
+    profile_name: str | None = None,
+) -> str:
+    """Apply a lighting effect and always persist it to a profile.
+
+    Works the same with or without the remap daemon:
+    - daemon on + target is active → save profile, reload daemon (owns HID)
+    - daemon on + target inactive → save that profile only (pad unchanged)
+    - daemon off → save profile, then write HID directly
+
+    Returns the profile name that was updated.
+    """
+    import logging
+
     if effect not in LIGHTING_EFFECTS:
         raise ValueError(f"Unknown effect: {effect}")
 
-    if _running_daemon() is not None:
-        _apply_lighting_via_daemon(
-            effect,
-            rgb=rgb,
-            rgb2=rgb2,
-            direction=direction,
-            speed=speed,
-            brightness=brightness,
-        )
-        return
+    target = profile_name or prof.get_active_profile_name()
+    lighting = _lighting_dict(
+        effect,
+        rgb=rgb,
+        rgb2=rgb2,
+        direction=direction,
+        speed=speed,
+        brightness=brightness,
+    )
+    saved = _persist_lighting(target, lighting)
+    active = prof.get_active_profile_name()
+    running = _running_daemon() is not None
+
+    if running:
+        if saved == active:
+            detail = nudge_daemon_reload()
+            logging.getLogger("tartarus_v2.hid").info(
+                "Daemon owns the keypad; applied %s via profile reload (%s)",
+                effect,
+                detail,
+            )
+        else:
+            logging.getLogger("tartarus_v2.hid").info(
+                "Saved %s lighting to inactive profile %s (activate to apply on pad)",
+                effect,
+                saved,
+            )
+        return saved
 
     from tartarus_v2.hid.chroma import ChromaController
     from tartarus_v2.hid.device import TartarusDevice
@@ -146,6 +177,7 @@ def set_effect(
             chroma.set_effect_reactive(rgb, speed)
         elif effect == "starlight":
             chroma.set_effect_starlight(rgb, speed)
+    return saved
 
 
 def list_profiles() -> list[dict[str, Any]]:

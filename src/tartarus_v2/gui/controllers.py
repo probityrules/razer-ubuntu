@@ -30,10 +30,12 @@ class LightingController:
         speed: int = 2,
         brightness: int | None = None,
         debug: bool = False,
-        save_to_profile: bool = False,
+        save_to_profile: bool = True,
         profile_name: str | None = None,
-    ) -> None:
-        actions.set_effect(
+    ) -> str:
+        """Apply lighting and persist to a profile (always; daemon or not)."""
+        del save_to_profile  # set_effect always persists
+        return actions.set_effect(
             effect,
             rgb=rgb,
             rgb2=rgb2,
@@ -41,22 +43,8 @@ class LightingController:
             speed=speed,
             brightness=brightness,
             debug=debug,
+            profile_name=profile_name,
         )
-        if save_to_profile:
-            name = profile_name or actions.show_profile()["name"]
-            data = actions.show_profile(name)
-            lighting = {
-                "effect": effect,
-                "rgb": rgb,
-                "direction": direction,
-                "speed": speed,
-            }
-            if brightness is not None:
-                lighting["brightness"] = brightness
-            if rgb2:
-                lighting["rgb2"] = rgb2
-            data["lighting"] = lighting
-            actions.save_profile_data(data, name)
 
     def apply_brightness(self, value: int, debug: bool = False) -> None:
         actions.set_brightness(value, debug=debug)
