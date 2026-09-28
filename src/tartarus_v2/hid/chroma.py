@@ -75,6 +75,17 @@ class ChromaController:
             protocol.set_led_state(C.VARSTORE, led_map[color], enabled),
             tx=C.TX_ID_PROFILE_LED,
         )
+        log.info("Profile LED %s=%s", color, "on" if enabled else "off")
+
+    def apply_profile_leds(self, leds: dict | None) -> None:
+        """Drive the three Tartarus mode/profile indicator LEDs.
+
+        Missing keys default to off so a profile switch clears LEDs that the
+        previous profile had lit.
+        """
+        state = leds or {}
+        for color in ("red", "green", "blue"):
+            self.set_profile_led(color, bool(state.get(color, False)))
 
     def set_game_led(self, enabled: bool) -> None:
         self._send(
@@ -194,3 +205,7 @@ class ChromaController:
         else:
             log.warning("Unknown effect %r; using spectrum", effect)
             self.set_effect_spectrum()
+
+        # Always apply after the matrix effect so profile switches update the
+        # three mode LEDs even when only the indicators changed.
+        self.apply_profile_leds(lighting.get("profile_leds"))

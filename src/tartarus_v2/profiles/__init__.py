@@ -52,6 +52,7 @@ def default_profile() -> dict[str, Any]:
         "lighting": {
             "effect": "spectrum",
             "brightness": 128,
+            "profile_leds": {"red": False, "green": False, "blue": False},
         },
         "standard": {
             "bindings": {

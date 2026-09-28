@@ -92,22 +92,86 @@ def test_device_info_and_effects(
     assert profiles.load_profile("default")["lighting"]["rgb"] == "FF0000"
 
 
-def test_lighting_persists_without_daemon(
+def test_normalize_profile_leds() -> None:
+    assert actions.normalize_profile_leds(None) == {
+        "red": False,
+        "green": False,
+        "blue": False,
+    }
+    assert actions.normalize_profile_leds({"red": 1, "blue": True}) == {
+        "red": True,
+        "green": False,
+        "blue": True,
+    }
+
+
+def test_apply_lighting_drives_profile_leds() -> None:
+    from tartarus_v2.hid.chroma import ChromaController
+
+    chroma = ChromaController(MagicMock())
+    with patch.object(chroma, "set_brightness") as bright:
+        with patch.object(chroma, "set_effect_static") as static:
+            with patch.object(chroma, "set_profile_led") as led:
+                chroma.apply_lighting(
+                    {
+                        "effect": "static",
+                        "rgb": "FF0000",
+                        "brightness": 10,
+                        "profile_leds": {"red": True, "green": False, "blue": True},
+                    }
+                )
+    bright.assert_called_once_with(10)
+    static.assert_called_once()
+    assert [c.args for c in led.call_args_list] == [
+        ("red", True),
+        ("green", False),
+        ("blue", True),
+    ]
+
+
+def test_set_effect_persists_profile_leds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     profiles.ensure_default_profile()
     with patch("tartarus_v2.hid.device.TartarusDevice") as mock_dev:
         mock_dev.return_value.__enter__.return_value = MagicMock()
-        with patch("tartarus_v2.hid.chroma.ChromaController"):
-            saved = actions.set_effect(
-                "static", rgb="AABBCC", brightness=50, profile_name="default"
+        with patch("tartarus_v2.hid.chroma.ChromaController") as chroma_cls:
+            chroma = chroma_cls.return_value
+            actions.set_effect(
+                "static",
+                rgb="AABBCC",
+                brightness=50,
+                profile_leds={"red": True, "green": False, "blue": False},
+                profile_name="default",
             )
-    assert saved == "default"
+    lighting = profiles.load_profile("default")["lighting"]
+    assert lighting["profile_leds"] == {
+        "red": True,
+        "green": False,
+        "blue": False,
+    }
+    chroma.apply_lighting.assert_called_once()
+    assert chroma.apply_lighting.call_args.args[0]["profile_leds"]["red"] is True
+
+
+def test_set_effect_preserves_leds_when_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    profiles.ensure_default_profile()
     data = profiles.load_profile("default")
-    assert data["lighting"]["effect"] == "static"
-    assert data["lighting"]["rgb"] == "AABBCC"
-    assert data["lighting"]["brightness"] == 50
+    data["lighting"]["profile_leds"] = {"red": False, "green": True, "blue": False}
+    profiles.save_profile(data, "default")
+    with patch("tartarus_v2.hid.device.TartarusDevice") as mock_dev:
+        mock_dev.return_value.__enter__.return_value = MagicMock()
+        with patch("tartarus_v2.hid.chroma.ChromaController"):
+            actions.set_effect("spectrum", profile_name="default")
+    assert profiles.load_profile("default")["lighting"]["profile_leds"] == {
+        "red": False,
+        "green": True,
+        "blue": False,
+    }
 
 
 def test_lighting_persists_with_daemon(

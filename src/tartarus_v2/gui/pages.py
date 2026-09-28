@@ -197,7 +197,7 @@ def build_lighting_page(window: Any) -> Any:
     page = Adw.PreferencesPage(title="Lighting", name="lighting")
     group = Adw.PreferencesGroup(
         title="Effects",
-        description="Apply saves colour to the profile and lights the pad (daemon or direct).",
+        description="Apply saves colour and mode LEDs to the profile and lights the pad (daemon or direct).",
     )
 
     # Effects that actually use the primary colour pickers.
@@ -406,6 +406,28 @@ def build_lighting_page(window: Any) -> Any:
     bright_row = Adw.ActionRow(title="Brightness")
     bright_row.add_suffix(bright)
 
+    def _make_led_switch(title: str, subtitle: str) -> tuple[Any, Any]:
+        switch = Gtk.Switch()
+        switch.set_valign(Gtk.Align.CENTER)
+        switch.set_active(False)
+        row = Adw.ActionRow(title=title, subtitle=subtitle)
+        row.add_suffix(switch)
+        row.set_activatable_widget(switch)
+        return row, switch
+
+    led_red_row, led_red = _make_led_switch(
+        "Mode LED · Red",
+        "Left/top indicator on the Tartarus (can combine with others)",
+    )
+    led_green_row, led_green = _make_led_switch(
+        "Mode LED · Green",
+        "Centre indicator on the Tartarus",
+    )
+    led_blue_row, led_blue = _make_led_switch(
+        "Mode LED · Blue",
+        "Right/bottom indicator on the Tartarus",
+    )
+
     from tartarus_v2.gui.controllers import ProfilesController
 
     profiles_ctrl = ProfilesController()
@@ -465,6 +487,12 @@ def build_lighting_page(window: Any) -> Any:
             speed.set_value(int(lighting.get("speed", 2)))
             if lighting.get("brightness") is not None:
                 bright.set_value(int(lighting["brightness"]))
+            from tartarus_v2.actions import normalize_profile_leds
+
+            leds = normalize_profile_leds(lighting.get("profile_leds"))
+            led_red.set_active(leds["red"])
+            led_green.set_active(leds["green"])
+            led_blue.set_active(leds["blue"])
             state["profile"] = name
             _sync_color_rows()
             _sync_secondary_sensitive()
@@ -557,6 +585,11 @@ def build_lighting_page(window: Any) -> Any:
                 direction=int(direction.get_value()),
                 speed=int(speed.get_value()),
                 brightness=int(bright.get_value()),
+                profile_leds={
+                    "red": bool(led_red.get_active()),
+                    "green": bool(led_green.get_active()),
+                    "blue": bool(led_blue.get_active()),
+                },
                 debug=getattr(window, "debug", False),
                 profile_name=target_profile,
             )
@@ -591,6 +624,9 @@ def build_lighting_page(window: Any) -> Any:
         dir_row,
         speed_row,
         bright_row,
+        led_red_row,
+        led_green_row,
+        led_blue_row,
         apply_row,
     ):
         group.add(row)

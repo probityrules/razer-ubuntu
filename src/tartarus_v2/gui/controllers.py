@@ -29,6 +29,7 @@ class LightingController:
         direction: int = 1,
         speed: int = 2,
         brightness: int | None = None,
+        profile_leds: dict[str, bool] | None = None,
         debug: bool = False,
         save_to_profile: bool = True,
         profile_name: str | None = None,
@@ -42,6 +43,7 @@ class LightingController:
             direction=direction,
             speed=speed,
             brightness=brightness,
+            profile_leds=profile_leds,
             debug=debug,
             profile_name=profile_name,
         )

@@ -51,6 +51,16 @@ def device_info(debug: bool = False) -> dict[str, Any]:
         }
 
 
+def normalize_profile_leds(value: Any | None) -> dict[str, bool]:
+    """Return ``{red, green, blue}`` bools for the three mode indicator LEDs."""
+    raw = value if isinstance(value, dict) else {}
+    return {
+        "red": bool(raw.get("red", False)),
+        "green": bool(raw.get("green", False)),
+        "blue": bool(raw.get("blue", False)),
+    }
+
+
 def _lighting_dict(
     effect: str,
     *,
@@ -59,6 +69,7 @@ def _lighting_dict(
     direction: int,
     speed: int,
     brightness: int | None,
+    profile_leds: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     lighting: dict[str, Any] = {
         "effect": effect,
@@ -70,6 +81,8 @@ def _lighting_dict(
         lighting["brightness"] = brightness
     if rgb2:
         lighting["rgb2"] = rgb2
+    if profile_leds is not None:
+        lighting["profile_leds"] = normalize_profile_leds(profile_leds)
     return lighting
 
 
@@ -110,6 +123,7 @@ def set_effect(
     direction: int = 1,
     speed: int = 2,
     brightness: int | None = None,
+    profile_leds: dict[str, bool] | None = None,
     debug: bool = False,
     profile_name: str | None = None,
 ) -> str:
@@ -128,6 +142,7 @@ def set_effect(
         raise ValueError(f"Unknown effect: {effect}")
 
     target = profile_name or prof.get_active_profile_name()
+    existing = dict(prof.load_profile(target).get("lighting") or {})
     lighting = _lighting_dict(
         effect,
         rgb=rgb,
@@ -135,7 +150,11 @@ def set_effect(
         direction=direction,
         speed=speed,
         brightness=brightness,
+        profile_leds=profile_leds,
     )
+    # CLI / older callers that omit profile_leds keep the stored indicators.
+    if profile_leds is None and "profile_leds" in existing:
+        lighting["profile_leds"] = normalize_profile_leds(existing.get("profile_leds"))
     saved = _persist_lighting(target, lighting)
     active = prof.get_active_profile_name()
     running = _running_daemon() is not None
@@ -160,23 +179,7 @@ def set_effect(
     from tartarus_v2.hid.device import TartarusDevice
 
     with TartarusDevice(debug=debug) as dev:
-        chroma = ChromaController(dev)
-        if brightness is not None:
-            chroma.set_brightness(int(brightness))
-        if effect == "none":
-            chroma.set_effect_none()
-        elif effect == "static":
-            chroma.set_effect_static(rgb)
-        elif effect == "spectrum":
-            chroma.set_effect_spectrum()
-        elif effect == "wave":
-            chroma.set_effect_wave(direction)
-        elif effect == "breath":
-            chroma.set_effect_breath(rgb, rgb2)
-        elif effect == "reactive":
-            chroma.set_effect_reactive(rgb, speed)
-        elif effect == "starlight":
-            chroma.set_effect_starlight(rgb, speed)
+        ChromaController(dev).apply_lighting(lighting)
     return saved
 
 

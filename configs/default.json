@@ -3,7 +3,8 @@
   "hypershift_key": "mode",
   "lighting": {
     "effect": "spectrum",
-    "brightness": 128
+    "brightness": 128,
+    "profile_leds": { "red": false, "green": false, "blue": false }
   },
   "standard": {
     "bindings": {
