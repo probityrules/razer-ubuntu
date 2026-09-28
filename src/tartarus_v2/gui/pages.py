@@ -189,6 +189,8 @@ def build_device_page(window: Any) -> Any:
 
 
 def build_lighting_page(window: Any) -> Any:
+    import colorsys
+
     from gi.repository import Adw, Gdk, Gtk
 
     ctrl = LightingController()
@@ -223,20 +225,154 @@ def build_lighting_page(window: Any) -> Any:
             f"{max(0, min(255, int(round(rgba.blue * 255)))):02X}"
         )
 
-    color_dialog = Gtk.ColorDialog()
-    color_dialog.set_with_alpha(False)
-    color_dialog.set_title("Choose colour")
+    def _rgba_from_hsv(h: float, s: float, v: float) -> Gdk.RGBA:
+        r, g, b = colorsys.hsv_to_rgb(h, s, v)
+        rgba = Gdk.RGBA()
+        rgba.red, rgba.green, rgba.blue, rgba.alpha = r, g, b, 1.0
+        return rgba
 
-    primary = Gtk.ColorDialogButton.new(color_dialog)
-    primary.set_rgba(_rgba_from_hex("00FF00"))
-    primary.set_tooltip_text("Primary colour")
+    def _boost_saturation(hex_rgb: str, *, min_s: float = 0.92) -> Any:
+        """Raise chroma of an Adwaita swatch while keeping its hue/value."""
+        rgba = _rgba_from_hex(hex_rgb)
+        h, s, v = colorsys.rgb_to_hsv(rgba.red, rgba.green, rgba.blue)
+        if s < 0.05:
+            return rgba  # leave near-grays alone
+        return _rgba_from_hsv(h, max(s, min_s), v)
+
+    def _vivid_colour_palette() -> list[Any]:
+        """5×8 swatch grid (columns of 5), with higher saturation than Adwaita.
+
+        Same hues/steps as the GTK chooser’s chromatic + gray columns, but each
+        non-gray swatch is boosted toward full saturation for clearer LED picks.
+        """
+        # 8 columns × 5 rows: blue, green, yellow, orange, red, purple, light, dark
+        adwaita_5x8 = (
+            # Blue
+            "99c1f1",
+            "62a0ea",
+            "3584e4",
+            "1c71d8",
+            "1a5fb4",
+            # Green
+            "8ff0a4",
+            "57e389",
+            "33d17a",
+            "2ec27e",
+            "26a269",
+            # Yellow
+            "f9f06b",
+            "f8e45c",
+            "f6d32d",
+            "f5c211",
+            "e5a50a",
+            # Orange
+            "ffbe6f",
+            "ffa348",
+            "ff7800",
+            "e66100",
+            "c64600",
+            # Red
+            "f66151",
+            "ed333b",
+            "e01b24",
+            "c01c28",
+            "a51d2d",
+            # Purple
+            "dc8add",
+            "c061cb",
+            "9141ac",
+            "813d9c",
+            "613583",
+            # Light gray → white
+            "ffffff",
+            "f6f5f4",
+            "deddda",
+            "c0bfbc",
+            "9a9996",
+            # Dark gray → black
+            "77767b",
+            "5e5c64",
+            "3d3846",
+            "241f31",
+            "000000",
+        )
+        return [_boost_saturation(hx) for hx in adwaita_5x8]
+
+    def _make_colour_button(initial_hex: str, tooltip: str) -> Any:
+        """Swatch button that opens a chooser with a vivid palette.
+
+        Gtk.ColorDialog has no palette API (and ColorDialogButton always uses it),
+        so we drive ColorChooserDialog.add_palette ourselves.
+        """
+        state: dict[str, Any] = {"rgba": _rgba_from_hex(initial_hex)}
+        swatch_name = f"tartarus-swatch-{id(state)}"
+
+        btn = Gtk.Button()
+        btn.set_valign(Gtk.Align.CENTER)
+        btn.set_tooltip_text(tooltip)
+        btn.add_css_class(swatch_name)
+
+        css = Gtk.CssProvider()
+        display = Gdk.Display.get_default()
+        if display is not None:
+            Gtk.StyleContext.add_provider_for_display(
+                display, css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
+
+        def _sync_swatch() -> None:
+            hx = _hex_from_rgba(state["rgba"])
+            css.load_from_data(
+                (
+                    f"button.{swatch_name} {{"
+                    f"  background: #{hx};"
+                    f"  min-width: 40px;"
+                    f"  min-height: 24px;"
+                    f"  border-radius: 6px;"
+                    f"  border: 1px solid rgba(0,0,0,0.35);"
+                    f"}}"
+                ).encode()
+            )
+
+        def get_rgba() -> Gdk.RGBA:
+            return state["rgba"]
+
+        def set_rgba(rgba: Gdk.RGBA) -> None:
+            fresh = Gdk.RGBA()
+            fresh.red = float(rgba.red)
+            fresh.green = float(rgba.green)
+            fresh.blue = float(rgba.blue)
+            fresh.alpha = float(rgba.alpha)
+            state["rgba"] = fresh
+            _sync_swatch()
+
+        def _open_chooser(_button: Any = None) -> None:
+            dialog = Gtk.ColorChooserDialog(title="Choose colour", transient_for=window)
+            dialog.set_modal(True)
+            dialog.set_use_alpha(False)
+            dialog.set_rgba(state["rgba"])
+            # columns of 5 == the familiar GTK “5 × N” colour grid
+            dialog.add_palette(Gtk.Orientation.VERTICAL, 5, _vivid_colour_palette())
+
+            def _on_response(dlg: Any, response_id: int) -> None:
+                if response_id == Gtk.ResponseType.OK:
+                    set_rgba(dlg.get_rgba())
+                dlg.destroy()
+
+            dialog.connect("response", _on_response)
+            dialog.present()
+
+        btn.get_rgba = get_rgba  # type: ignore[attr-defined]
+        btn.set_rgba = set_rgba  # type: ignore[attr-defined]
+        btn.connect("clicked", _open_chooser)
+        _sync_swatch()
+        return btn
+
+    primary = _make_colour_button("00FF00", "Primary colour")
     rgb_row = Adw.ActionRow(title="Primary colour")
     rgb_row.add_suffix(primary)
     rgb_row.set_activatable_widget(primary)
 
-    secondary = Gtk.ColorDialogButton.new(color_dialog)
-    secondary.set_rgba(_rgba_from_hex("0000FF"))
-    secondary.set_tooltip_text("Secondary colour (breath dual, etc.)")
+    secondary = _make_colour_button("0000FF", "Secondary colour (breath dual, etc.)")
     use_secondary = Gtk.Switch()
     use_secondary.set_valign(Gtk.Align.CENTER)
     rgb2_row = Adw.ActionRow(
