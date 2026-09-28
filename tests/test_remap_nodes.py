@@ -225,6 +225,87 @@ def test_wheel_binding_emits_rel_not_key() -> None:
     remapper._apply_binding("scroll_left_typo", True)  # noqa: SLF001
 
 
+def test_release_uses_press_time_codes_across_hypershift() -> None:
+    """Key-up after Hypershift enter must release the original output (no stick)."""
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    remapper = Remapper(
+        {
+            "hypershift_key": "mode",
+            "standard": {"bindings": {"key_01": "a"}},
+            "hypershift": {"bindings": {"key_01": "f1"}},
+        }
+    )
+    remapper._ecodes = SimpleNamespace(KEY_A=30, KEY_F1=59)  # noqa: SLF001
+    remapper._output_codes = {30, 59}  # noqa: SLF001
+    writes: list[tuple[int, int]] = []
+
+    class FakeUI:
+        def write(self, etype: int, code: int, value: int) -> None:
+            writes.append((code, value))
+
+        def syn(self) -> None:
+            pass
+
+    remapper._ui = FakeUI()  # noqa: SLF001
+    evdev = ModuleType("evdev")
+    ecodes = ModuleType("evdev.ecodes")
+    ecodes.EV_KEY = 1
+    evdev.ecodes = ecodes
+    sys.modules["evdev"] = evdev
+    sys.modules["evdev.ecodes"] = ecodes
+    try:
+        remapper._handle_key("key_01", True)  # noqa: SLF001
+        remapper._handle_key("mode", True)  # noqa: SLF001 — Hypershift ENTER
+        remapper._handle_key("key_01", False)  # noqa: SLF001 — must release KEY_A, not F1
+    finally:
+        sys.modules.pop("evdev", None)
+        sys.modules.pop("evdev.ecodes", None)
+    assert writes == [(30, 1), (30, 0)]
+    assert remapper._held_outputs == {}  # noqa: SLF001
+
+
+def test_release_all_held_clears_stuck_keys() -> None:
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    remapper = Remapper(
+        {
+            "hypershift_key": "mode",
+            "standard": {"bindings": {"key_01": "a", "key_02": "b"}},
+            "hypershift": {"bindings": {}},
+        }
+    )
+    remapper._ecodes = SimpleNamespace(KEY_A=30, KEY_B=48)  # noqa: SLF001
+    remapper._output_codes = {30, 48}  # noqa: SLF001
+    writes: list[tuple[int, int]] = []
+
+    class FakeUI:
+        def write(self, etype: int, code: int, value: int) -> None:
+            writes.append((code, value))
+
+        def syn(self) -> None:
+            pass
+
+    remapper._ui = FakeUI()  # noqa: SLF001
+    evdev = ModuleType("evdev")
+    ecodes = ModuleType("evdev.ecodes")
+    ecodes.EV_KEY = 1
+    evdev.ecodes = ecodes
+    sys.modules["evdev"] = evdev
+    sys.modules["evdev.ecodes"] = ecodes
+    try:
+        remapper._handle_key("key_01", True)  # noqa: SLF001
+        remapper._handle_key("key_02", True)  # noqa: SLF001
+        remapper.release_all_held()
+    finally:
+        sys.modules.pop("evdev", None)
+        sys.modules.pop("evdev.ecodes", None)
+    assert writes == [(30, 1), (48, 1), (30, 0), (48, 0)]
+    assert remapper._held_outputs == {}  # noqa: SLF001
+
+
 def test_wheel_write_enodev_does_not_raise() -> None:
     """Errno 19 on wheel write must not crash the remapper (scroll crash)."""
     from types import SimpleNamespace

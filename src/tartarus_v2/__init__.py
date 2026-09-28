@@ -1,3 +1,3 @@
 """Standalone userspace driver for Razer Tartarus V2."""
 
-__version__ = "0.17.1"
+__version__ = "0.17.2"

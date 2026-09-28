@@ -194,6 +194,10 @@ class Remapper:
         self._logged_wheel = False
         self._output_codes = set(virtual_keyboard_keycodes(0x2FF))
         self._dropped_codes: set[int] = set()
+        # logical key → output EV_KEY codes currently held for it. Release must
+        # use these (press-time) codes — re-resolving after a Hypershift layer
+        # change is what made keys stick.
+        self._held_outputs: dict[str, list[int]] = {}
 
     def _require_evdev(self) -> Any:
         try:
@@ -649,9 +653,25 @@ class Remapper:
                 time.sleep(0.01)
                 self._emit(list(reversed(codes)), False)
 
+    def _note_held(self, logical: str, codes: list[int]) -> None:
+        if codes:
+            self._held_outputs[logical] = list(codes)
+
+    def _release_held(self, logical: str) -> None:
+        codes = self._held_outputs.pop(logical, None)
+        if codes:
+            self._emit(codes, False)
+
+    def release_all_held(self) -> None:
+        """Emit key-up for every tracked hold (profile reload / switch)."""
+        for logical in list(self._held_outputs):
+            self._release_held(logical)
+
     def _safe_profile_switch(self, direction: str) -> None:
         if not self.on_profile_switch:
             return
+        # Bindings are about to change — clear any held outputs first.
+        self.release_all_held()
         try:
             self.on_profile_switch(direction)
         except Exception as exc:  # noqa: BLE001
@@ -678,12 +698,19 @@ class Remapper:
                 log.info("Hypershift %s", "ENTER" if pressed else "EXIT")
             return
 
+        # Release always uses press-time output codes (survives layer changes).
+        if not pressed:
+            if logical in self._held_outputs:
+                self._release_held(logical)
+            return
+
         binding = self._binding_for(logical)
         if binding is None:
             # passthrough default physical code if known
             code = keytable.LOGICAL_TO_CODE.get(logical)
             if code is not None:
-                self._emit([code], pressed)
+                self._emit([code], True)
+                self._note_held(logical, [code])
             elif self.debug:
                 log.debug("No binding for %s pressed=%s", logical, pressed)
             return
@@ -696,23 +723,23 @@ class Remapper:
         if isinstance(binding, str) and "+" not in binding:
             lower = binding.strip().lower()
             if lower in keytable.WHEEL_OUTPUT_TOKENS:
-                if pressed:
-                    self._emit_wheel(lower)
+                self._emit_wheel(lower)
                 return
             codes = self.resolve_key_token(binding)
             if codes:
-                self._emit(codes, pressed)
+                self._emit(codes, True)
+                self._note_held(logical, codes)
                 return
 
         if isinstance(binding, dict) and binding.get("type", "key") == "key":
             codes = self.resolve_key_token(binding.get("keys") or binding.get("key"))
             if codes:
-                self._emit(codes, pressed)
+                self._emit(codes, True)
+                self._note_held(logical, codes)
             return
 
-        # macros / combos / profile / wheel actions fire on press
-        if pressed:
-            self._apply_binding(binding, True)
+        # macros / combos / profile / wheel actions fire as taps on press
+        self._apply_binding(binding, True)
 
     def _drop_lost_device(self, fds: dict[int, Any], fd: int, exc: BaseException) -> None:
         """Remove one vanished evdev node; keep remapping on the rest."""

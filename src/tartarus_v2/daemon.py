@@ -40,6 +40,7 @@ class Daemon:
             except Exception as exc:  # noqa: BLE001
                 log.error("Failed to apply lighting for %s: %s", name, exc)
         if self._remapper is not None:
+            self._remapper.release_all_held()
             self._remapper.profile = self.profile
 
     def reload_active_profile(self) -> None:
@@ -58,6 +59,7 @@ class Daemon:
             except Exception as exc:  # noqa: BLE001
                 log.error("Failed to apply lighting after reload: %s", exc)
         if self._remapper is not None:
+            self._remapper.release_all_held()
             self._remapper.profile = self.profile
             self._remapper._hypershift_held = False  # noqa: SLF001
 
