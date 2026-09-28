@@ -184,12 +184,14 @@ class Remapper:
         self._hypershift_held = False
         self._devices: list[Any] = []
         self._ui: Any = None
+        self._mouse: Any = None
         self._ecodes: Any = None
         self._running = False
         self._unknown_codes: set[int] = set()
         self._mirror_seen: dict[tuple[int, int], tuple[float, int]] = {}
         self._mirror_logged: set[int] = set()
         self._logged_output = False
+        self._logged_wheel = False
         self._output_codes = set(virtual_keyboard_keycodes(0x2FF))
         self._dropped_codes: set[int] = set()
 
@@ -251,8 +253,9 @@ class Remapper:
         return [int(code)]
 
     def _emit_wheel(self, token: str) -> None:
-        """Emit one mouse-wheel tick on the virtual device."""
-        assert self._ui is not None
+        """Emit one mouse-wheel tick on the virtual mouse (not the keyboard)."""
+        if self._mouse is None:
+            return
         ecodes = self._ecodes
         if ecodes is None:
             return
@@ -264,11 +267,25 @@ class Remapper:
         if code is None:
             log.warning("Wheel axis %s missing from evdev; skipping %r", rel_name, token)
             return
-        self._ui.write(ecodes.EV_REL, int(code), int(ticks))
-        self._ui.syn()
-        if not self._logged_output:
-            self._logged_output = True
-            log.info("Virtual wheel output active (first %s → %s %s)", token, rel_name, ticks)
+        try:
+            self._mouse.write(ecodes.EV_REL, int(code), int(ticks))
+            self._mouse.syn()
+        except OSError as exc:
+            # Errno 19 (ENODEV) on hybrid keyboard+wheel uinput was the scroll crash.
+            log.error(
+                "Virtual mouse wheel write failed for %r (continuing): %s",
+                token,
+                exc,
+            )
+            return
+        if not self._logged_wheel:
+            self._logged_wheel = True
+            log.info(
+                "Virtual mouse wheel output active (first %s → %s %s)",
+                token,
+                rel_name,
+                ticks,
+            )
 
     def find_devices(self) -> list[Any]:
         evdev = self._require_evdev()
@@ -370,6 +387,8 @@ class Remapper:
             return False
         if name == "Tartarus V2 Virtual Keyboard":
             return False
+        if name == "Tartarus V2 Virtual Mouse":
+            return False
         return True
 
     def start(self) -> None:
@@ -387,20 +406,35 @@ class Remapper:
             ", ".join(f"{getattr(d, 'name', '?')} ({getattr(d, 'path', '?')})" for d in devices),
         )
 
-        caps: dict[int, list[int]] = {
+        # Keep keyboard and mouse as separate uinput nodes. Mixing EV_REL into the
+        # keyboard made some stacks return ENODEV (errno 19) on the first wheel
+        # write and tear down the remapper mid-scroll.
+        key_caps: dict[int, list[int]] = {
             ecodes.EV_KEY: virtual_keyboard_keycodes(int(ecodes.KEY_MAX)),
+        }
+        mouse_caps: dict[int, list[int]] = {
             ecodes.EV_REL: [ecodes.REL_WHEEL, ecodes.REL_HWHEEL],
         }
 
         try:
             log.info("Creating virtual keyboard via /dev/uinput")
-            self._ui = UInput(caps, name="Tartarus V2 Virtual Keyboard", version=0x1)
+            self._ui = UInput(key_caps, name="Tartarus V2 Virtual Keyboard", version=0x1)
+            log.info("Creating virtual mouse via /dev/uinput (scroll wheel)")
+            self._mouse = UInput(
+                mouse_caps, name="Tartarus V2 Virtual Mouse", version=0x1
+            )
         except OSError as exc:
             for dev in devices:
                 try:
                     dev.close()
                 except Exception:  # noqa: BLE001
                     pass
+            if self._ui is not None:
+                try:
+                    self._ui.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._ui = None
             raise RuntimeError(uinput_failure_message(exc)) from exc
         self._devices = devices
         grabbed = 0
@@ -462,11 +496,18 @@ class Remapper:
             except Exception:  # noqa: BLE001
                 pass
             self._ui = None
+        if self._mouse is not None:
+            try:
+                self._mouse.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._mouse = None
 
     def _emit(self, codes: list[int], pressed: bool) -> None:
         from evdev import ecodes
 
-        assert self._ui is not None
+        if self._ui is None:
+            return
         value = 1 if pressed else 0
         allowed = [code for code in codes if code in self._output_codes]
         for code in codes:
@@ -486,9 +527,13 @@ class Remapper:
                 codes[0],
                 pressed,
             )
-        for code in codes:
-            self._ui.write(ecodes.EV_KEY, code, value)
-        self._ui.syn()
+        try:
+            for code in codes:
+                self._ui.write(ecodes.EV_KEY, code, value)
+            self._ui.syn()
+        except OSError as exc:
+            # ENODEV (19) here used to kill the whole daemon on scroll/key chatter.
+            log.error("Virtual keyboard write failed (continuing): %s", exc)
 
     def _drop_mirrored_key(self, dev: Any, event: Any) -> bool:
         """Swallow the duplicate report from the other keyboard interface."""
@@ -560,12 +605,10 @@ class Remapper:
             if kind == "hypershift":
                 return
             if kind == "profile_next" and pressed:
-                if self.on_profile_switch:
-                    self.on_profile_switch("next")
+                self._safe_profile_switch("next")
                 return
             if kind == "profile_prev" and pressed:
-                if self.on_profile_switch:
-                    self.on_profile_switch("prev")
+                self._safe_profile_switch("prev")
                 return
             if kind == "wheel" and pressed:
                 direction = str(binding.get("dir") or binding.get("key") or "")
@@ -606,7 +649,27 @@ class Remapper:
                 time.sleep(0.01)
                 self._emit(list(reversed(codes)), False)
 
+    def _safe_profile_switch(self, direction: str) -> None:
+        if not self.on_profile_switch:
+            return
+        try:
+            self.on_profile_switch(direction)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Profile switch (%s) failed (continuing): %s", direction, exc)
+
     def _handle_key(self, logical: str, pressed: bool) -> None:
+        try:
+            self._handle_key_inner(logical, pressed)
+        except Exception as exc:  # noqa: BLE001
+            # Never let one bad binding (or ENODEV on write) stop the remapper.
+            log.error(
+                "Handler error for %s pressed=%s (continuing): %s",
+                logical,
+                pressed,
+                exc,
+            )
+
+    def _handle_key_inner(self, logical: str, pressed: bool) -> None:
         hs_key = keytable.canonical_logical(str(self.profile.get("hypershift_key") or ""))
         if keytable.canonical_logical(logical) == hs_key:
             was = self._hypershift_held
@@ -651,6 +714,24 @@ class Remapper:
         if pressed:
             self._apply_binding(binding, True)
 
+    def _drop_lost_device(self, fds: dict[int, Any], fd: int, exc: BaseException) -> None:
+        """Remove one vanished evdev node; keep remapping on the rest."""
+        dev = fds.pop(fd, None)
+        path = getattr(dev, "path", fd) if dev is not None else fd
+        log.error("Tartarus input node %s disappeared: %s", path, exc)
+        if dev is not None:
+            try:
+                dev.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._devices = [d for d in self._devices if d is not dev]
+        if not fds:
+            raise RuntimeError(input_node_lost_message(exc)) from exc
+        log.warning(
+            "Continuing remapper with %d remaining Tartarus input node(s)",
+            len(fds),
+        )
+
     def run_forever(self) -> None:
         if not self._devices:
             self.start()
@@ -658,6 +739,10 @@ class Remapper:
         fds = {d.fd: d for d in self._devices}
         try:
             while self._running:
+                if not fds:
+                    raise RuntimeError(
+                        "All Tartarus input nodes disappeared while remapping."
+                    )
                 try:
                     r, _, _ = select.select(list(fds.keys()), [], [], 0.5)
                 except OSError as exc:
@@ -665,33 +750,38 @@ class Remapper:
                         raise
                     raise RuntimeError(input_node_lost_message(exc)) from exc
                 for fd in r:
-                    dev = fds[fd]
+                    dev = fds.get(fd)
+                    if dev is None:
+                        continue
                     try:
                         events = list(dev.read())
                     except OSError as exc:
                         if grab_error_is_fatal(exc):
                             raise
-                        log.error(
-                            "Tartarus input node %s disappeared: %s",
-                            getattr(dev, "path", fd),
-                            exc,
-                        )
-                        raise RuntimeError(input_node_lost_message(exc)) from exc
+                        self._drop_lost_device(fds, fd, exc)
+                        continue
                     for event in events:
-                        if self._drop_mirrored_key(dev, event):
-                            continue
-                        logical = self._logical_from_event(event)
-                        if logical is None:
-                            self._passthrough_unmapped(event)
-                            continue
-                        from evdev import ecodes
-
-                        if event.type == ecodes.EV_KEY:
-                            if event.value == 2:  # hold repeat
+                        try:
+                            if self._drop_mirrored_key(dev, event):
                                 continue
-                            self._handle_key(logical, event.value == 1)
-                        elif event.type == ecodes.EV_REL:
-                            # scroll: synthesize press
-                            self._handle_key(logical, True)
+                            logical = self._logical_from_event(event)
+                            if logical is None:
+                                self._passthrough_unmapped(event)
+                                continue
+                            from evdev import ecodes
+
+                            if event.type == ecodes.EV_KEY:
+                                if event.value == 2:  # hold repeat
+                                    continue
+                                self._handle_key(logical, event.value == 1)
+                            elif event.type == ecodes.EV_REL:
+                                # scroll: synthesize press
+                                self._handle_key(logical, True)
+                        except Exception as exc:  # noqa: BLE001
+                            log.error(
+                                "Event handler error on %s (continuing): %s",
+                                getattr(dev, "path", fd),
+                                exc,
+                            )
         finally:
             self.stop()

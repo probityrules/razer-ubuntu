@@ -211,8 +211,8 @@ def test_wheel_binding_emits_rel_not_key() -> None:
         def syn(self) -> None:
             pass
 
-    remapper._ui = FakeUI()  # noqa: SLF001
-    remapper._logged_output = False  # noqa: SLF001
+    remapper._mouse = FakeUI()  # noqa: SLF001
+    remapper._logged_wheel = False  # noqa: SLF001
     remapper._apply_binding("scroll_left", True)  # noqa: SLF001
     remapper._apply_binding("scroll_right", True)  # noqa: SLF001
     remapper._apply_binding("scroll_up", True)  # noqa: SLF001
@@ -223,3 +223,37 @@ def test_wheel_binding_emits_rel_not_key() -> None:
     ]
     # Unknown keyboard token must not raise.
     remapper._apply_binding("scroll_left_typo", True)  # noqa: SLF001
+
+
+def test_wheel_write_enodev_does_not_raise() -> None:
+    """Errno 19 on wheel write must not crash the remapper (scroll crash)."""
+    from types import SimpleNamespace
+
+    remapper = Remapper({})
+    remapper._ecodes = SimpleNamespace(  # noqa: SLF001
+        EV_REL=2,
+        REL_WHEEL=8,
+        REL_HWHEEL=6,
+    )
+
+    class BrokenMouse:
+        def write(self, *_a: object, **_k: object) -> None:
+            raise OSError(errno.ENODEV, "No such device")
+
+        def syn(self) -> None:
+            pass
+
+    remapper._mouse = BrokenMouse()  # noqa: SLF001
+    remapper._emit_wheel("scroll_up")  # noqa: SLF001 — must not raise
+    remapper._handle_key("scroll_up", True)  # noqa: SLF001 with wheel binding
+    remapper.profile = {
+        "hypershift_key": "mode",
+        "standard": {"bindings": {"scroll_up": "scroll_left"}},
+        "hypershift": {"bindings": {}},
+    }
+    remapper._handle_key("scroll_up", True)  # noqa: SLF001
+
+
+def test_virtual_mouse_name_is_not_grabbed() -> None:
+    assert not is_tartarus_event_node("Tartarus V2 Virtual Mouse")
+    assert not is_tartarus_event_node("usb-Tartarus_V2_Virtual_Mouse-event-mouse")
