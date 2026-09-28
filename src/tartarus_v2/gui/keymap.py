@@ -288,7 +288,7 @@ def build_keymap_grid(
     for logical in KEYMAP_SCROLL_COLUMN:
         seg = _make_key(
             logical,
-            extra_classes=("keymap-scroll", "flat"),
+            extra_classes=("keymap-scroll",),
             width=64,
             height=56,
             max_chars=8,
