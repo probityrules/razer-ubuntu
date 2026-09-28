@@ -89,6 +89,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(p_info)
 
     p_gui = sub.add_parser("gui", help="Open the GTK4 / Libadwaita control app")
+    p_gui.add_argument(
+        "--restart",
+        action="store_true",
+        help="If the GUI is already open, replace it with a fresh process (no-op otherwise)",
+    )
     _add_common(p_gui)
 
     return parser
@@ -189,6 +194,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "gui":
+        if getattr(args, "restart", False):
+            from tartarus_v2 import gui_control
+
+            st = gui_control.restart_if_running(debug=args.debug)
+            print(st.detail)
+            # Not running is success (upgrade left the GUI closed on purpose).
+            return 0 if ("restarted" in st.detail or "not running" in st.detail) else 1
         return actions.launch_gui(debug=args.debug)
 
     parser.error(f"Unknown command {args.command}")

@@ -15,6 +15,7 @@ The package:
 - Puts `tartarus-v2` on `PATH` via `/usr/bin/tartarus-v2`
 - Installs udev rules and a desktop entry
 - Depends on distro packages for `python3-usb`, `python3-evdev`, GTK4/Libadwaita GI, etc.
+- Tray uses StatusNotifierItem over D-Bus (no Ayatana/GTK3 AppIndicator)
 
 ## CI release
 

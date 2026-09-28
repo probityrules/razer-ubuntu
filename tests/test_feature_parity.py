@@ -62,3 +62,15 @@ def test_tray_status_text() -> None:
     short, _ = tray_status_text(profile=long_name, daemon_running=True)
     assert short.endswith("…")
     assert len(short) == 16
+
+
+def test_tray_uses_status_notifier_not_ayatana() -> None:
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[1] / "src/tartarus_v2/gui/tray.py").read_text(
+        encoding="utf-8"
+    )
+    assert "StatusNotifierItem" in text
+    assert "com.canonical.dbusmenu" in text
+    assert "AyatanaAppIndicator3" not in text
+    assert "XAyatanaLabel" in text

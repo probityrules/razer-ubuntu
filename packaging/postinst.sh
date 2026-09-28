@@ -59,19 +59,26 @@ echo "  If remapping fails: tartarus-v2 fix-permissions"
 
 # Best-effort: fully restart the installing user's remap daemon so upgrades
 # drop any leftover in-memory remapper (systemd unit and/or PID-file process).
+# Also restart the GUI when it is already open so tray/UI code picks up the
+# new package (left stopped if the user was not running it).
 if [ -n "$TARGET_USER" ] && [ "$TARGET_USER" != "root" ] && command -v tartarus-v2 >/dev/null 2>&1; then
   TARGET_UID="$(id -u "$TARGET_USER" 2>/dev/null || true)"
   if command -v runuser >/dev/null 2>&1; then
     if [ -n "$TARGET_UID" ] && [ -d "/run/user/$TARGET_UID" ]; then
       runuser -u "$TARGET_USER" --env "XDG_RUNTIME_DIR=/run/user/$TARGET_UID" -- \
         tartarus-v2 daemon --restart >/dev/null 2>&1 || true
+      runuser -u "$TARGET_USER" --env "XDG_RUNTIME_DIR=/run/user/$TARGET_UID" -- \
+        tartarus-v2 gui --restart >/dev/null 2>&1 || true
     else
       runuser -u "$TARGET_USER" -- tartarus-v2 daemon --restart >/dev/null 2>&1 || true
+      runuser -u "$TARGET_USER" -- tartarus-v2 gui --restart >/dev/null 2>&1 || true
     fi
     echo "tartarus-v2: restarted remap daemon for '$TARGET_USER' (systemd and/or background)."
+    echo "tartarus-v2: restarted GUI for '$TARGET_USER' when it was already open."
   elif command -v su >/dev/null 2>&1; then
     su - "$TARGET_USER" -c "tartarus-v2 daemon --restart >/dev/null 2>&1 || true" || true
-    echo "tartarus-v2: attempted remap daemon restart for '$TARGET_USER'."
+    su - "$TARGET_USER" -c "tartarus-v2 gui --restart >/dev/null 2>&1 || true" || true
+    echo "tartarus-v2: attempted remap daemon + GUI restart for '$TARGET_USER'."
   fi
   echo "tartarus-v2: if keys stay dead after upgrade: tartarus-v2 daemon --restart"
   echo "  or log out/in (reboot also works)."

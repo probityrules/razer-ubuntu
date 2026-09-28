@@ -111,7 +111,7 @@ Priority: optional
 Architecture: all
 Maintainer: tartarus-v2 contributors <noreply@users.noreply.github.com>
 Homepage: https://github.com/probityrules/razer-ubuntu
-Depends: python3 (>= 3.10), python3-usb, python3-evdev, python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, gir1.2-ayatanaappindicator3-0.1, libusb-1.0-0, udev
+Depends: python3 (>= 3.10), python3-usb, python3-evdev, python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, libusb-1.0-0, udev
 Recommends: python3-gi
 Description: Userspace driver for Razer Tartarus V2
  Standalone Linux userspace stack for the Razer Tartarus V2 keypad:

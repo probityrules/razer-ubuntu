@@ -14,7 +14,6 @@ sudo apt-get install -y \
   python3-gi \
   gir1.2-gtk-4.0 \
   gir1.2-adw-1 \
-  gir1.2-ayatanaappindicator3-0.1 \
   libusb-1.0-0 \
   udev
 

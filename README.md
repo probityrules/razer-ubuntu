@@ -20,7 +20,7 @@ No OpenRazer runtime dependency. Supports RGB lighting, key remapping, **Hypersh
 ## Requirements
 
 - Ubuntu 26.x (or 24.04+) with GNOME
-- Python 3.10+ (system `python3-gi`, GTK4, Libadwaita, Ayatana AppIndicator)
+- Python 3.10+ (system `python3-gi`, GTK4, Libadwaita)
 - Razer Tartarus V2 over USB
 - User in `input` and `plugdev` groups (installer / `fix-permissions` adds these)
 
@@ -56,7 +56,7 @@ tartarus-v2 gui
 tartarus-v2 diagnose --out ~/tartarus-diagnose.log
 ```
 
-The installer adds a **Tartarus V2** desktop entry. The GUI uses system tray (AppIndicator) for start/stop daemon and profile cycling.
+The installer adds a **Tartarus V2** desktop entry. The GUI uses a StatusNotifierItem tray (active profile label, start/stop daemon, profile cycling).
 
 ## GUI overview
 

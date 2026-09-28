@@ -45,7 +45,9 @@ def test_menu_includes_update_action() -> None:
     assert '"app.check_update"' in window
     assert 'SimpleAction.new("check_update"' in app
     assert "present_update_check" in app
-    assert 'add_item("Check for updates' in tray
+    assert "Check for updates" in tray
+    assert "StatusNotifierItem" in tray
+    assert "present_update_check" in tray
     assert 'KERNEL=="uinput"' in rules
 
 

@@ -24,27 +24,14 @@ def require_gi() -> None:
     except (ImportError, ValueError) as exc:
         raise GuiUnavailable(
             "GTK4 / Libadwaita (PyGObject) not available. On Ubuntu install:\n"
-            "  sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 "
-            "gir1.2-ayatanaappindicator3-0.1\n"
+            "  sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1\n"
             f"Details: {exc}"
         ) from exc
 
 
 def try_appindicator() -> bool:
-    try:
-        import gi
+    """Deprecated: Ayatana AppIndicator is GTK3-only and unused by the tray.
 
-        gi.require_version("AyatanaAppIndicator3", "0.1")
-        from gi.repository import AyatanaAppIndicator3  # noqa: F401
-
-        return True
-    except Exception:  # noqa: BLE001
-        try:
-            import gi
-
-            gi.require_version("AppIndicator3", "0.1")
-            from gi.repository import AppIndicator3  # noqa: F401
-
-            return True
-        except Exception:  # noqa: BLE001
-            return False
+    Kept for callers/tests; always False so nothing tries to load GTK3 beside GTK4.
+    """
+    return False
