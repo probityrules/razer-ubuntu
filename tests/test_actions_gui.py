@@ -59,6 +59,10 @@ def test_profiles_roundtrip(profile_home: Path) -> None:
     created = ctrl.create_profile("fresh")
     assert created.exists()
     assert "fresh" in [i["name"] for i in ctrl.refresh_profiles()]
+    removed = ctrl.delete_profile("fresh")
+    assert removed.name == "fresh"
+    assert removed.switched is False
+    assert "fresh" not in [i["name"] for i in ctrl.refresh_profiles()]
 
 
 def test_bindings_hypershift(profile_home: Path) -> None:

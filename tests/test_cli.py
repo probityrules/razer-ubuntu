@@ -25,6 +25,7 @@ def test_parser_all_top_level_commands() -> None:
         ["profile", "list"],
         ["profile", "show", "default"],
         ["profile", "use", "default"],
+        ["profile", "delete", "studio"],
         ["profile", "path"],
         ["info"],
         ["gui"],
@@ -105,6 +106,49 @@ def test_main_profile_show(_fmt: MagicMock, _show: MagicMock) -> None:
 def test_main_profile_use(mock_use: MagicMock) -> None:
     assert main(["profile", "use", "default"]) == 0
     mock_use.assert_called_once_with("default")
+
+
+@patch("tartarus_v2.cli.actions.delete_profile")
+def test_main_profile_delete_switches(
+    mock_delete: MagicMock, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tartarus_v2.actions import ProfileDeletion
+
+    mock_delete.return_value = ProfileDeletion(name="studio", active="arena", switched=True)
+    assert main(["profile", "delete", "studio"]) == 0
+    out = capsys.readouterr().out
+    assert "Deleted studio" in out
+    assert "Active profile set to arena" in out
+    mock_delete.assert_called_once_with("studio")
+
+
+@patch("tartarus_v2.cli.actions.delete_profile")
+def test_main_profile_delete_keeps_active(
+    mock_delete: MagicMock, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tartarus_v2.actions import ProfileDeletion
+
+    mock_delete.return_value = ProfileDeletion(name="arena", active="studio", switched=False)
+    assert main(["profile", "delete", "arena"]) == 0
+    captured = capsys.readouterr()
+    assert "Deleted arena" in captured.out
+    assert "Active profile" not in captured.out
+
+
+@patch("tartarus_v2.cli.actions.delete_profile", side_effect=ValueError("Cannot delete the only profile"))
+def test_main_profile_delete_refuses_last(
+    _mock_delete: MagicMock, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["profile", "delete", "default"]) == 1
+    assert "only profile" in capsys.readouterr().err
+
+
+@patch("tartarus_v2.cli.actions.delete_profile", side_effect=FileNotFoundError("Profile not found: gone"))
+def test_main_profile_delete_missing(
+    _mock_delete: MagicMock, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["profile", "delete", "gone"]) == 1
+    assert "not found" in capsys.readouterr().err
 
 
 @patch("tartarus_v2.cli.actions.profiles_path")

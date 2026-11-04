@@ -664,7 +664,10 @@ def build_profiles_page(window: Any) -> Any:
     page = Adw.PreferencesPage(title="Profiles", name="profiles")
     group = Adw.PreferencesGroup(
         title="Profiles",
-        description="Activate a profile, or add a new one. Advanced tools are in the dialog below.",
+        description=(
+            "Activate a profile, add a new one, or delete one. "
+            "The last profile stays. Advanced tools are in the dialog below."
+        ),
     )
 
     state: dict[str, Any] = {"rows": []}
@@ -681,7 +684,9 @@ def build_profiles_page(window: Any) -> Any:
 
     def reload(_b: Any = None) -> None:
         _clear_group()
-        for item in ctrl.refresh_profiles():
+        items = ctrl.refresh_profiles()
+        can_delete = len(items) > 1
+        for item in items:
             name = item["name"]
             subtitle = "Active" if item["active"] else "Click to activate"
             row = Adw.ActionRow(title=name, subtitle=subtitle)
@@ -698,6 +703,47 @@ def build_profiles_page(window: Any) -> Any:
                 except Exception as exc:  # noqa: BLE001
                     _error(window, "Could not activate profile", str(exc))
 
+            delete_btn = Gtk.Button(icon_name="user-trash-symbolic")
+            delete_btn.add_css_class("flat")
+            delete_btn.add_css_class("destructive-action")
+            delete_btn.set_valign(Gtk.Align.CENTER)
+            delete_btn.set_tooltip_text(
+                f"Delete {name}" if can_delete else "At least one profile has to remain"
+            )
+            delete_btn.set_sensitive(can_delete)
+
+            def _ask_delete(_btn: Any, profile_name: str = name) -> None:
+                dialog = Adw.AlertDialog.new(
+                    f"Delete {profile_name}?",
+                    "Removes this profile's saved bindings and lighting. "
+                    "If it is active, the next profile in the list becomes active.",
+                )
+                dialog.add_response("cancel", "Cancel")
+                dialog.add_response("delete", "Delete")
+                dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+                dialog.set_default_response("cancel")
+                dialog.set_close_response("cancel")
+
+                def on_response(_d: Any, response: str, target: str = profile_name) -> None:
+                    if response != "delete":
+                        return
+                    try:
+                        result = ctrl.delete_profile(target)
+                    except Exception as exc:  # noqa: BLE001
+                        _error(window, "Could not delete profile", str(exc))
+                        return
+                    reload()
+                    _refresh_header_daemon(window)
+                    if result.switched:
+                        _toast(window, f"Deleted {target} · active {result.active}")
+                    else:
+                        _toast(window, f"Deleted {target}")
+
+                dialog.connect("response", on_response)
+                dialog.present(window)
+
+            delete_btn.connect("clicked", _ask_delete)
+            row.add_suffix(delete_btn)
             row.connect("activated", _activate)
             _add_row(row)
 
