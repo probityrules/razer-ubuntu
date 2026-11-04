@@ -33,9 +33,30 @@ def profiles_dir() -> Path:
     return path
 
 
+def validate_profile_name(name: str) -> str:
+    """Return a profile filename stem, rejecting path components."""
+    cleaned = str(name).strip()
+    if not cleaned:
+        raise ValueError("Profile name required")
+    if cleaned in {".", ".."} or "/" in cleaned or "\\" in cleaned or "\x00" in cleaned:
+        raise ValueError(f"Invalid profile name: {cleaned}")
+    if any(ord(ch) < 32 for ch in cleaned):
+        raise ValueError(f"Invalid profile name: {cleaned}")
+    return cleaned
+
+
 def ensure_default_profile() -> Path:
-    dest = profiles_dir() / f"{DEFAULT_PROFILE_NAME}.json"
+    """Return the default profile path.
+
+    The built-in profile is created only when the profiles directory has no
+    JSON files. Once any other profile exists, a missing ``default`` stays
+    missing so deleting the stock profile is not undone on the next list.
+    """
+    root = profiles_dir()
+    dest = root / f"{DEFAULT_PROFILE_NAME}.json"
     if dest.exists():
+        return dest
+    if any(root.glob("*.json")):
         return dest
     src = package_configs_dir() / "default.json"
     if src.exists():
@@ -144,7 +165,7 @@ def load_profile(name: str = DEFAULT_PROFILE_NAME) -> dict[str, Any]:
 
 
 def save_profile(profile: dict[str, Any], name: str | None = None) -> Path:
-    name = name or profile.get("name") or DEFAULT_PROFILE_NAME
+    name = validate_profile_name(name or profile.get("name") or DEFAULT_PROFILE_NAME)
     # Canonicalize before copying so the caller's object matches what is stored.
     fold_thumb_alias(profile)
     # Deep-copy so callers cannot accidentally share nested bindings across profiles.
@@ -168,6 +189,16 @@ def get_active_profile_name() -> str:
 
 def set_active_profile_name(name: str) -> None:
     active_profile_path().write_text(name.strip() + "\n", encoding="utf-8")
+
+
+def remove_profile(name: str) -> Path:
+    """Unlink a profile JSON. Does not change the active-profile pointer."""
+    name = validate_profile_name(name)
+    path = profiles_dir() / f"{name}.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"Profile not found: {name} ({path})")
+    path.unlink()
+    return path
 
 
 def cycle_profile(direction: str = "next") -> str:

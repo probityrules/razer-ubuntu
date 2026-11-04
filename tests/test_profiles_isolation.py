@@ -212,3 +212,92 @@ def test_new_profile_clones_active_but_then_diverges(profile_home: Path) -> None
     actions.save_bindings("clone", "standard", {"key_01": "clone-only"}, "mode")
     default_again = prof.load_profile("default")
     assert default_again["standard"]["bindings"]["key_01"] == "default-only"
+
+
+def test_delete_profile_removes_file_and_keeps_siblings(profile_home: Path) -> None:
+    prof.ensure_default_profile()
+    actions.create_profile("studio")
+    actions.create_profile("arena")
+    result = actions.delete_profile("arena")
+    assert result.name == "arena"
+    assert result.switched is False
+    assert not (prof.profiles_dir() / "arena.json").exists()
+    assert (prof.profiles_dir() / "studio.json").exists()
+    assert "arena" not in prof.list_profiles()
+    assert "studio" in prof.list_profiles()
+
+
+def test_delete_active_profile_uses_next_sorted_name(profile_home: Path) -> None:
+    from unittest.mock import patch
+
+    prof.ensure_default_profile()
+    actions.create_profile("arena")
+    actions.create_profile("studio")
+    # Sorted order is arena, default, studio. Deleting the active head selects default.
+    prof.set_active_profile_name("arena")
+    with patch("tartarus_v2.actions._push_active_lighting", return_value="applied") as push:
+        result = actions.delete_profile("arena")
+    assert result.switched is True
+    assert result.active == "default"
+    assert prof.get_active_profile_name() == "default"
+    push.assert_called_once()
+    # Deleting the last sorted name wraps to the first remaining name.
+    prof.set_active_profile_name("studio")
+    with patch("tartarus_v2.actions._push_active_lighting", return_value="applied"):
+        wrapped = actions.delete_profile("studio")
+    assert wrapped.switched is True
+    assert wrapped.active == "default"
+    assert prof.list_profiles() == ["default"]
+
+
+def test_cannot_delete_the_only_profile(profile_home: Path) -> None:
+    prof.ensure_default_profile()
+    with pytest.raises(ValueError, match="only profile"):
+        actions.delete_profile("default")
+    assert (prof.profiles_dir() / "default.json").exists()
+    assert prof.list_profiles() == ["default"]
+
+
+def test_deleted_default_is_not_recreated(profile_home: Path) -> None:
+    from unittest.mock import patch
+
+    prof.ensure_default_profile()
+    actions.create_profile("studio")
+    with patch("tartarus_v2.actions._push_active_lighting", return_value="applied"):
+        result = actions.delete_profile("default")
+    assert result.switched is True
+    assert result.active == "studio"
+    assert prof.list_profiles() == ["studio"]
+    assert prof.load_profile("studio")["name"] == "studio"
+    assert not (prof.profiles_dir() / "default.json").exists()
+    assert prof.list_profiles() == ["studio"]
+
+
+def test_delete_inactive_default_stays_gone(profile_home: Path) -> None:
+    prof.ensure_default_profile()
+    actions.create_profile("studio")
+    prof.set_active_profile_name("studio")
+    result = actions.delete_profile("default")
+    assert result.switched is False
+    assert result.active == "studio"
+    assert prof.get_active_profile_name() == "studio"
+    assert prof.list_profiles() == ["studio"]
+    assert not (prof.profiles_dir() / "default.json").exists()
+
+
+def test_delete_rejects_path_escape(profile_home: Path) -> None:
+    prof.ensure_default_profile()
+    actions.create_profile("studio")
+    outside = profile_home / "tartarus-v2" / "outside.json"
+    with pytest.raises(ValueError, match="Invalid profile name"):
+        actions.delete_profile("../outside")
+    with pytest.raises(ValueError, match="Invalid profile name"):
+        actions.delete_profile("bad\nname")
+    with pytest.raises(ValueError, match="Invalid profile name"):
+        prof.save_profile(prof.default_profile(), "nested/evil")
+    assert not outside.exists()
+    assert not (prof.profiles_dir() / "nested" / "evil.json").exists()
+    with pytest.raises(FileNotFoundError):
+        actions.delete_profile("missing")
+    with pytest.raises(FileNotFoundError):
+        prof.remove_profile("missing")

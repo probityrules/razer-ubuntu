@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from tartarus_v2 import profiles as prof
 
@@ -294,13 +294,45 @@ def duplicate_profile(source: str, dest: str) -> Path:
     return prof.save_profile(data, dest)
 
 
+class ProfileDeletion(NamedTuple):
+    """Result of deleting a profile file."""
+
+    name: str
+    active: str
+    switched: bool
+
+
+def delete_profile(name: str) -> ProfileDeletion:
+    """Delete a profile file.
+
+    The last remaining profile is kept. When the deleted profile is the
+    active one, the next name in sorted order becomes active (wrapping to
+    the first) and its lighting is applied the same way as ``use_profile``.
+    """
+    name = prof.validate_profile_name(name)
+    names = prof.list_profiles()
+    if name not in names:
+        raise FileNotFoundError(f"Profile not found: {name}")
+    if len(names) < 2:
+        raise ValueError("Cannot delete the only profile")
+    was_active = prof.get_active_profile_name() == name
+    prof.remove_profile(name)
+    if not was_active:
+        return ProfileDeletion(
+            name=name,
+            active=prof.get_active_profile_name(),
+            switched=False,
+        )
+    successor = names[(names.index(name) + 1) % len(names)]
+    use_profile(successor)
+    return ProfileDeletion(name=name, active=successor, switched=True)
+
+
 def create_profile(name: str, *, clone_active: bool = True) -> Path:
     """Create a new profile from the active one (or the built-in default)."""
     import copy
 
-    name = name.strip()
-    if not name:
-        raise ValueError("Profile name required")
+    name = prof.validate_profile_name(name)
     if any(p["name"] == name for p in list_profiles()):
         raise ValueError(f"Profile already exists: {name}")
     if clone_active:

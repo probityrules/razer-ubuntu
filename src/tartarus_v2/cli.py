@@ -83,6 +83,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_show.add_argument("name", nargs="?", default=None)
     p_use = p_prof_sub.add_parser("use", help="Set active profile")
     p_use.add_argument("name")
+    p_delete = p_prof_sub.add_parser("delete", help="Delete a profile")
+    p_delete.add_argument("name")
     p_prof_sub.add_parser("path", help="Print profiles directory")
 
     p_info = sub.add_parser("info", help="Print firmware/serial/brightness")
@@ -181,6 +183,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.profile_cmd == "use":
             name = actions.use_profile(args.name)
             print(f"Active profile set to {name}")
+            return 0
+        if args.profile_cmd == "delete":
+            try:
+                result = actions.delete_profile(args.name)
+            except (ValueError, FileNotFoundError, OSError) as exc:
+                print(exc, file=sys.stderr)
+                return 1
+            print(f"Deleted {result.name}")
+            if result.switched:
+                print(f"Active profile set to {result.active}")
             return 0
         if args.profile_cmd == "path":
             print(actions.profiles_path())

@@ -71,6 +71,9 @@ class ProfilesController:
     def create_profile(self, name: str, *, clone_active: bool = True) -> Path:
         return actions.create_profile(name, clone_active=clone_active)
 
+    def delete_profile(self, name: str) -> actions.ProfileDeletion:
+        return actions.delete_profile(name)
+
 
 class BindingsController:
     def logical_keys(self) -> list[str]:

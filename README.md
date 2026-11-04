@@ -10,7 +10,7 @@ No OpenRazer runtime dependency. Supports RGB lighting, key remapping, **Hypersh
 |------|-----|-----|
 | Device info | `tartarus-v2 info` | Device page |
 | RGB / brightness | `set-effect`, `set-brightness` | Lighting page |
-| Profiles | `profile list/show/use/path` | Profiles page |
+| Profiles | `profile list/show/use/delete/path` | Profiles page |
 | Remap + Hypershift + macros | profile JSON + daemon | Bindings page |
 | Daemon | `tartarus-v2 daemon` | Daemon page + tray |
 | Permissions | `fix-permissions` | Device / Daemon → Fix permissions |

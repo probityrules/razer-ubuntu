@@ -23,6 +23,7 @@ FEATURE_MAP: tuple[Feature, ...] = (
     Feature("profile.list", "list_profiles", "profiles", "refresh_profiles"),
     Feature("profile.show", "show_profile", "profiles", "show_profile"),
     Feature("profile.use", "use_profile", "profiles", "activate_profile"),
+    Feature("profile.delete", "delete_profile", "profiles", "delete_profile"),
     Feature("profile.path", "profiles_path", "profiles", "open_profiles_dir"),
     Feature("info", "device_info", "device", "refresh_device"),
     Feature("gui", "launch_gui", "app", "launch"),
