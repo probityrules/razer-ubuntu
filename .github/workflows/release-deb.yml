@@ -89,30 +89,38 @@ jobs:
           VERSION="${{ steps.ver.outputs.version }}"
           TAG="v${VERSION}"
           DEB="dist/tartarus-v2_${VERSION}_all.deb"
+          LATEST_DEB="dist/tartarus-v2_latest_all.deb"
           test -f "$DEB"
+          cp -f "$DEB" "$LATEST_DEB"
+
+          CHANGES="$(mktemp)"
+          python3 packaging/changelog-notes.py "$VERSION" -o "$CHANGES"
 
           NOTES="$(mktemp)"
-          cat > "$NOTES" <<EOF
-          ## tartarus-v2 ${VERSION}
+          {
+            echo "## tartarus-v2 ${VERSION}"
+            echo
+            if [[ -s "$CHANGES" ]]; then
+              cat "$CHANGES"
+              echo
+            else
+              echo "_No changelog entry found for this version — see CHANGELOG.md._"
+              echo
+            fi
+            echo "### Install (Ubuntu 24.04 / 26.x)"
+            echo
+            echo '```bash'
+            echo "curl -LO \"https://github.com/${{ github.repository }}/releases/latest/download/tartarus-v2_latest_all.deb\""
+            echo 'sudo apt install "./tartarus-v2_latest_all.deb"'
+            echo 'sudo usermod -aG input,plugdev "$USER"'
+            echo '# log out and back in, then:'
+            echo 'tartarus-v2 gui'
+            echo '```'
+            echo
+            echo "Versioned asset: \`tartarus-v2_${VERSION}_all.deb\`. Full history: [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)."
+          } > "$NOTES"
 
-          ### Install (Ubuntu 24.04 / 26.x)
-
-          \`\`\`bash
-          # From the assets below, or:
-          curl -LO "https://github.com/${{ github.repository }}/releases/download/${TAG}/tartarus-v2_${VERSION}_all.deb"
-          sudo apt install "./tartarus-v2_${VERSION}_all.deb"
-          sudo usermod -aG input,plugdev "\$USER"
-          # log out and back in, then:
-          tartarus-v2 gui
-          \`\`\`
-
-          Built automatically from \`main\` when the version in \`pyproject.toml\` changed.
-          EOF
-
-          # Strip leading indentation from heredoc for cleaner release notes
-          sed -i 's/^          //' "$NOTES"
-
-          gh release create "$TAG" "$DEB" \
+          gh release create "$TAG" "$DEB" "$LATEST_DEB" \
             --repo "${{ github.repository }}" \
             --title "tartarus-v2 ${VERSION}" \
             --notes-file "$NOTES" \

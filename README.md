@@ -28,12 +28,11 @@ No OpenRazer runtime dependency. Supports RGB lighting, key remapping, **Hypersh
 
 ### From GitHub Releases (recommended)
 
-On each version bump to `main`, CI builds a `.deb` and attaches it to a GitHub Release (`vX.Y.Z`):
+On each version bump to `main`, CI builds a `.deb` and attaches it to a GitHub Release (`vX.Y.Z`). The stable `tartarus-v2_latest_all.deb` asset always tracks the newest release:
 
 ```bash
-# Example for v0.6.1 — use the latest release tag/assets from GitHub:
-curl -LO "https://github.com/probityrules/razer-ubuntu/releases/latest/download/tartarus-v2_0.6.1_all.deb"
-sudo apt install ./tartarus-v2_0.6.1_all.deb
+curl -LO "https://github.com/probityrules/razer-ubuntu/releases/latest/download/tartarus-v2_latest_all.deb"
+sudo apt install ./tartarus-v2_latest_all.deb
 # postinst adds you to input+plugdev when it can detect your user
 # log out/in, then:
 tartarus-v2 gui
@@ -41,7 +40,7 @@ tartarus-v2 gui
 tartarus-v2 fix-permissions   # or Device/Daemon → Fix permissions in the GUI
 ```
 
-(Exact `.deb` filename matches the release version.)
+(Versioned assets like `tartarus-v2_0.18.0_all.deb` remain available on each release page. See [CHANGELOG.md](CHANGELOG.md).)
 
 ### From source
 

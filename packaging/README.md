@@ -19,7 +19,13 @@ The package:
 
 ## CI release
 
-`.github/workflows/release-deb.yml` runs on every push to `main`. If `pyproject.toml` version changed vs the previous commit, it builds the `.deb` and creates GitHub Release `v<version>` with the artifact attached.
+`.github/workflows/release-deb.yml` runs on every push to `main`. If `pyproject.toml` version changed vs the previous commit, it builds the `.deb` and creates GitHub Release `v<version>` with:
+
+- Versioned asset `tartarus-v2_<version>_all.deb`
+- Stable alias `tartarus-v2_latest_all.deb` (what the README install one-liner uses)
+- Release notes taken from that version’s section in `CHANGELOG.md`
+
+Add an entry under `## [Unreleased]` while working, then move it to `## [X.Y.Z] - YYYY-MM-DD` in the same commit as the version bump (`bcp`).
 
 ### Notefully key (Report issue)
 
